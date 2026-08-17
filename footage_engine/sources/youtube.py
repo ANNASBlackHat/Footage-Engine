@@ -139,7 +139,13 @@ class YouTubeAdapter:
             "extract_flat": False,
             "no_color": True,
             "noplaylist": True,
+            "remote_components": ["ejs:github"],
         }
+
+        # Auto-detect deno JS runtime if available
+        deno_bin = os.path.expanduser("~/.deno/bin/deno")
+        if os.path.exists(deno_bin):
+            opts["js_runtimes"] = {"deno": {"path": deno_bin}}
 
         # Apply cookie file if resolved
         if self.resolved_cookie_file and os.path.exists(self.resolved_cookie_file):
