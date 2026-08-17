@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "footage-engine"
+version = "0.1.0"
+description = "Standalone Footage Retrieval Engine"
+readme = "SPEC.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+    "sqlalchemy>=2.0.25",
+    "requests>=2.31.0",
+    "python-dotenv>=1.0.0",
+    "imagekitio>=3.0.0",
+    "yt-dlp>=2024.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-mock>=3.12.0",
+]
+video = [
+    "opencv-python-headless>=4.8.0",
+    "scenedetect[opencv]>=0.6.2",
+    "torch>=2.1.0",
+    "transformers>=4.36.0",
+    "pymilvus>=2.3.0",
+    "numpy>=1.24.0",
+    "pillow>=10.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["footage_engine*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
