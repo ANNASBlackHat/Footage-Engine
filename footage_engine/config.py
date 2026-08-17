@@ -18,7 +18,9 @@ class Settings(BaseSettings):
     # Storage
     STORAGE_BACKEND: Literal["local", "imagekit"] = "local"
     LOCAL_STORAGE_DIR: str = "./data/storage"
-    UPLOAD_RAW_TO_STORAGE: bool = False  # If False, streams directly from source_url without uploading to storage
+    UPLOAD_RAW_TO_STORAGE: bool = False  # If False, streams directly from source_url without uploading raw master
+    UPLOAD_CHUNKS_TO_STORAGE: bool = False  # If True, slices individual scene chunks and uploads .mp4 files to storage
+
 
     # ImageKit Credentials (if using imagekit backend)
     IMAGEKIT_PUBLIC_KEY: str | None = None

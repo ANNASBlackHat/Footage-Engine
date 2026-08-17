@@ -118,3 +118,26 @@ def test_create_chunks_in_db(test_settings):
         assert item.status == MediaStatus.CHUNKING
         assert created[0].embedding_model == "xclip-base-patch32"
         assert created[0].embedding_version == "1.0"
+
+
+def test_extract_video_clip(temp_dir):
+    import cv2
+    import numpy as np
+    from footage_engine.chunking.detector import extract_video_clip
+
+    # Create dummy 5s video
+    video_path = os.path.join(temp_dir, "master_video.mp4")
+    fps = 24
+    width, height = 320, 240
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    out = cv2.VideoWriter(video_path, fourcc, fps, (width, height))
+    for _ in range(120):
+        frame = np.zeros((height, width, 3), dtype=np.uint8)
+        out.write(frame)
+    out.release()
+
+    output_clip = os.path.join(temp_dir, "extracted_chunk.mp4")
+    result_path = extract_video_clip(video_path, start_ts=1.0, end_ts=3.0, output_path=output_clip)
+
+    assert os.path.exists(result_path)
+    assert os.path.getsize(result_path) > 100

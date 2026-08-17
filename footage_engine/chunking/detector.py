@@ -207,3 +207,76 @@ def create_chunks_in_db(
     media_item.status = MediaStatus.CHUNKING
     session.flush()
     return created_chunks
+
+
+def extract_video_clip(
+    video_path: str,
+    start_ts: float,
+    end_ts: float,
+    output_path: str,
+) -> str:
+    """Extracts a precise sub-clip from video_path between start_ts and end_ts and writes to output_path."""
+    import os
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    out_dir = Path(output_path).parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Attempt fast & accurate stream cut via ffmpeg if available
+    ffmpeg_bin = shutil.which("ffmpeg")
+    if ffmpeg_bin:
+        dur = max(0.1, end_ts - start_ts)
+        cmd = [
+            ffmpeg_bin,
+            "-y",
+            "-ss", str(start_ts),
+            "-i", video_path,
+            "-t", str(dur),
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-crf", "22",
+            "-c:a", "aac",
+            "-movflags", "+faststart",
+            output_path,
+        ]
+        try:
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+            if res.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 500:
+                return output_path
+        except Exception as e:
+            logger.warning(f"ffmpeg clipping failed: {e}. Falling back to OpenCV.")
+
+    # 2. Fallback via OpenCV VideoWriter
+    if cv2 is None:
+        raise ImportError("opencv-python or ffmpeg is required for video sub-clip extraction.")
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise ValueError(f"Unable to open video file at {video_path}")
+
+    try:
+        fps = cap.get(cv2.CAP_PROP_FPS) or 24.0
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+
+        start_frame = int(start_ts * fps)
+        end_frame = int(end_ts * fps)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+
+        current_frame = start_frame
+        while cap.isOpened() and current_frame <= end_frame:
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                break
+            writer.write(frame)
+            current_frame += 1
+
+        writer.release()
+        return output_path
+    finally:
+        cap.release()
+

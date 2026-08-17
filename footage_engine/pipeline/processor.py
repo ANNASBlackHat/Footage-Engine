@@ -1,11 +1,13 @@
 """Batch processing pipeline for chunking, embedding, and indexing."""
 
 import logging
+import os
+import tempfile
 import uuid
 from typing import Optional
 from sqlalchemy import select
 
-from footage_engine.chunking.detector import create_chunks_in_db, preprocess_media
+from footage_engine.chunking.detector import create_chunks_in_db, extract_video_clip, preprocess_media
 from footage_engine.config import Settings, get_settings
 from footage_engine.embeddings import get_embedder
 from footage_engine.embeddings.base import EmbeddingBackend
@@ -87,6 +89,30 @@ class BatchProcessor:
                     s_ts = f"{chunk.start_ts:.1f}s" if chunk.start_ts is not None else "0.0s"
                     e_ts = f"{chunk.end_ts:.1f}s" if chunk.end_ts is not None else "0.0s"
                     print(f"    → Embedding chunk {i}/{len(chunks)} ({s_ts} - {e_ts})...", flush=True)
+                    # Optional physical chunk slicing and upload to storage
+                    if self.settings.UPLOAD_CHUNKS_TO_STORAGE and item.media_type != MediaType.IMAGE and chunk.end_ts:
+                        try:
+                            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_chunk:
+                                tmp_chunk_path = tmp_chunk.name
+                            extract_video_clip(
+                                video_path=local_path,
+                                start_ts=chunk.start_ts,
+                                end_ts=chunk.end_ts,
+                                output_path=tmp_chunk_path,
+                            )
+                            if os.path.exists(tmp_chunk_path) and os.path.getsize(tmp_chunk_path) > 100:
+                                with open(tmp_chunk_path, "rb") as cf:
+                                    chunk_bytes = cf.read()
+                                chunk_filename = f"chunks/{item.id[:8]}_{chunk.id[:8]}.mp4"
+                                saved_path = self.storage.save_file(chunk_bytes, chunk_filename)
+                                chunk.storage_path = saved_path
+                                logger.info(f"Uploaded physical chunk {chunk.id} to {saved_path}")
+                        except Exception as ce:
+                            logger.warning(f"Failed to upload physical chunk {chunk.id}: {ce}")
+                        finally:
+                            if os.path.exists(tmp_chunk_path):
+                                os.remove(tmp_chunk_path)
+
                     if item.media_type == MediaType.IMAGE:
                         vec = self.embedder.embed_image(local_path)
                     else:

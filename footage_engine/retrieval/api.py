@@ -86,7 +86,8 @@ class RetrievalAPI:
                 chunk.last_used_at = utc_now()
                 media_item = chunk.media_item
 
-                storage_url = self.storage.get_url(media_item.storage_path) if media_item.storage_path else ""
+                eff_storage_path = chunk.storage_path or media_item.storage_path
+                storage_url = self.storage.get_url(eff_storage_path) if eff_storage_path else ""
 
                 res = ChunkResult(
                     chunk_id=chunk.id,
@@ -98,7 +99,7 @@ class RetrievalAPI:
                     media_type=chunk.media_type.value,
                     provider=media_item.provider,
                     source_url=media_item.source_url,
-                    storage_path=media_item.storage_path,
+                    storage_path=eff_storage_path,
                     storage_url=storage_url,
                     resolution=media_item.resolution,
                     license_type=media_item.license_type,
@@ -121,7 +122,8 @@ class RetrievalAPI:
             if not chunk:
                 return None
             media_item = chunk.media_item
-            storage_url = self.storage.get_url(media_item.storage_path) if media_item.storage_path else ""
+            eff_storage_path = chunk.storage_path or media_item.storage_path
+            storage_url = self.storage.get_url(eff_storage_path) if eff_storage_path else ""
             return ChunkResult(
                 chunk_id=chunk.id,
                 media_item_id=media_item.id,
@@ -132,7 +134,7 @@ class RetrievalAPI:
                 media_type=chunk.media_type.value,
                 provider=media_item.provider,
                 source_url=media_item.source_url,
-                storage_path=media_item.storage_path,
+                storage_path=eff_storage_path,
                 storage_url=storage_url,
                 resolution=media_item.resolution,
                 license_type=media_item.license_type,

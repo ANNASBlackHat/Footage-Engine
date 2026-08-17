@@ -138,6 +138,7 @@ class Chunk(Base):
     embedding_model: Mapped[str] = mapped_column(String(100), default="xclip-base-patch32")
     embedding_version: Mapped[str] = mapped_column(String(50), default="1.0")
     vector_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    storage_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     caption: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     tags: Mapped[Optional[list[str]]] = mapped_column(JSON, nullable=True)
     usage_count: Mapped[int] = mapped_column(Integer, default=0)
