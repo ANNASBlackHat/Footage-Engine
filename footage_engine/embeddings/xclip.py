@@ -1,7 +1,7 @@
 """X-CLIP embedding implementation using microsoft/xclip-base-patch32."""
 
 import logging
-from typing import Optional
+from typing import Any, Optional
 from PIL import Image
 
 from footage_engine.embeddings.frames import sample_frames_from_video
@@ -52,6 +52,17 @@ class XCLIPEmbedder:
         self.model = AutoModel.from_pretrained(model_name).to(self.device)
         self.model.eval()
 
+    def _extract_tensor(self, features: Any) -> "torch.Tensor":
+        if isinstance(features, torch.Tensor):
+            return features
+        if hasattr(features, "pooler_output") and features.pooler_output is not None:
+            return features.pooler_output
+        if hasattr(features, "last_hidden_state") and features.last_hidden_state is not None:
+            return features.last_hidden_state[:, 0, :]
+        if isinstance(features, (tuple, list)):
+            return features[0]
+        return features
+
     def embed_video(
         self,
         video_path: str,
@@ -72,6 +83,7 @@ class XCLIPEmbedder:
 
         with torch.no_grad():
             video_features = self.model.get_video_features(**inputs)
+            video_features = self._extract_tensor(video_features)
             # L2 normalize
             normalized = video_features / video_features.norm(p=2, dim=-1, keepdim=True)
 
@@ -89,6 +101,7 @@ class XCLIPEmbedder:
 
         with torch.no_grad():
             video_features = self.model.get_video_features(**inputs)
+            video_features = self._extract_tensor(video_features)
             normalized = video_features / video_features.norm(p=2, dim=-1, keepdim=True)
 
         return normalized.squeeze(0).cpu().tolist()
@@ -100,6 +113,7 @@ class XCLIPEmbedder:
 
         with torch.no_grad():
             text_features = self.model.get_text_features(**inputs)
+            text_features = self._extract_tensor(text_features)
             normalized = text_features / text_features.norm(p=2, dim=-1, keepdim=True)
 
         return normalized.squeeze(0).cpu().tolist()
