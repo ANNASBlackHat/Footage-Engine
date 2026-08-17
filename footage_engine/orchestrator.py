@@ -86,7 +86,7 @@ class Orchestrator:
     def ingest(
         self,
         source_url: str,
-        provider: str,
+        provider: str = "manual",
         source_id: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
         license_type: str = "unknown",
@@ -102,6 +102,17 @@ class Orchestrator:
             if not source_id:
                 source_id = extract_youtube_video_id(normalized_url)
             media_type = "video"
+            if not metadata or not duration_sec or not resolution:
+                try:
+                    yt_adapter = self.adapters.get("youtube") or YouTubeAdapter()
+                    cand = yt_adapter.url_to_candidate(normalized_url, metadata=metadata)
+                    metadata = cand.metadata
+                    duration_sec = duration_sec or cand.duration_sec
+                    resolution = resolution or cand.resolution
+                    if license_type == "unknown":
+                        license_type = cand.license_type
+                except Exception as e:
+                    logger.warning(f"Could not auto-extract YouTube metadata for {normalized_url}: {e}")
 
         # 1. Dedup check (Pre-spend)
         existing = self.find_existing(normalized_url, provider, source_id)
@@ -269,7 +280,7 @@ def get_orchestrator() -> Orchestrator:
 
 def ingest(
     source_url: str,
-    provider: str,
+    provider: str = "manual",
     source_id: str | None = None,
     metadata: dict | None = None,
     license_type: str = "unknown",

@@ -119,3 +119,57 @@ def test_chunk_relationship_and_cascade(test_settings):
     with get_db_session(test_settings.DATABASE_URL) as session:
         for cid in chunk_ids:
             assert session.get(Chunk, cid) is None
+
+
+def test_media_item_and_chunk_aspect_ratio():
+    from footage_engine.retrieval.models import ChunkResult
+
+    # Landscape / Horizontal 16:9
+    item_16_9 = MediaItem(
+        provider="pexels",
+        source_url="https://example.com/h.mp4",
+        storage_path="h.mp4",
+        resolution="1920x1080",
+    )
+    assert item_16_9.width == 1920
+    assert item_16_9.height == 1080
+    assert item_16_9.orientation == "horizontal"
+    assert item_16_9.aspect_ratio == "16:9"
+
+    # Vertical 9:16 (Shorts / Reels / TikTok)
+    item_9_16 = MediaItem(
+        provider="pexels",
+        source_url="https://example.com/v.mp4",
+        storage_path="v.mp4",
+        resolution="1080x1920",
+    )
+    assert item_9_16.orientation == "vertical"
+    assert item_9_16.aspect_ratio == "9:16"
+
+    # Square 1:1
+    item_1_1 = MediaItem(
+        provider="pixabay",
+        source_url="https://example.com/s.mp4",
+        storage_path="s.mp4",
+        resolution="1080x1080",
+    )
+    assert item_1_1.orientation == "square"
+    assert item_1_1.aspect_ratio == "1:1"
+
+    # ChunkResult properties
+    res = ChunkResult(
+        chunk_id="chunk123",
+        media_item_id="item123",
+        score=0.95,
+        start_ts=0.0,
+        end_ts=10.0,
+        duration_sec=10.0,
+        media_type="video",
+        provider="pexels",
+        source_url="https://example.com/h.mp4",
+        storage_path="h.mp4",
+        storage_url="https://storage/h.mp4",
+        resolution="3840x2160",
+    )
+    assert res.orientation == "horizontal"
+    assert res.aspect_ratio == "16:9"

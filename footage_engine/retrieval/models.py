@@ -53,9 +53,59 @@ class ChunkResult:
     last_used_at: Optional[datetime] = None
     item_metadata: dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def width(self) -> Optional[int]:
+        if self.resolution and "x" in self.resolution:
+            try:
+                return int(self.resolution.split("x")[0])
+            except ValueError:
+                pass
+        return None
+
+    @property
+    def height(self) -> Optional[int]:
+        if self.resolution and "x" in self.resolution:
+            try:
+                return int(self.resolution.split("x")[1])
+            except ValueError:
+                pass
+        return None
+
+    @property
+    def orientation(self) -> str:
+        """Returns 'horizontal' (landscape, 16:9), 'vertical' (portrait, 9:16/shorts/reels), or 'square' (1:1)."""
+        w, h = self.width, self.height
+        if not w or not h:
+            return "unknown"
+        if w > h:
+            return "horizontal"
+        elif h > w:
+            return "vertical"
+        return "square"
+
+    @property
+    def aspect_ratio(self) -> Optional[str]:
+        """Returns standard aspect ratio such as '16:9', '9:16', '1:1', '4:3'."""
+        w, h = self.width, self.height
+        if not w or not h:
+            return None
+        import math
+        ratio = round(w / h, 2)
+        if ratio in (1.77, 1.78):
+            return "16:9"
+        elif ratio in (0.56, 0.57):
+            return "9:16"
+        elif ratio == 1.0:
+            return "1:1"
+        elif ratio in (1.33, 1.34):
+            return "4:3"
+        gcd = math.gcd(w, h)
+        return f"{w // gcd}:{h // gcd}"
+
     def __repr__(self) -> str:
         return (
             f"<ChunkResult id={self.chunk_id} score={self.score:.3f} "
             f"[{self.start_ts:.1f}s-{self.end_ts if self.end_ts is not None else 'end'}s] "
+            f"res={self.resolution or 'unknown'} ({self.orientation}) "
             f"provider={self.provider}>"
         )
