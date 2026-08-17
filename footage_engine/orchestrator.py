@@ -117,8 +117,17 @@ class Orchestrator:
         # 1. Dedup check (Pre-spend)
         existing = self.find_existing(normalized_url, provider, source_id)
         if existing:
-            logger.info(f"Duplicate found for {provider}:{source_id or normalized_url}. Returning existing MediaItem {existing.id}.")
-            return existing
+            if existing.status == MediaStatus.DONE:
+                logger.info(f"Duplicate found for {provider}:{source_id or normalized_url}. Returning existing MediaItem {existing.id}.")
+                return existing
+            else:
+                # Existing item was failed or incomplete, delete and re-attempt ingestion
+                logger.info(f"Existing MediaItem {existing.id} was in {existing.status.value} status. Retrying ingestion...")
+                with get_db_session(self.database_url) as session:
+                    db_item = session.get(MediaItem, existing.id)
+                    if db_item:
+                        session.delete(db_item)
+                        session.commit()
 
         storage_path = normalized_url
 
