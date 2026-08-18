@@ -43,6 +43,19 @@ class MockEmbedder:
         seed = f"video:{video_path}:{start_ts}:{end_ts}"
         return self._generate_vector(seed)
 
+    def embed_video_batch(
+        self,
+        video_path: str,
+        chunk_ranges: list[tuple[float, Optional[float]]],
+        batch_size: int = 8,
+        num_frames: int = 8,
+    ) -> list[list[float]]:
+        return [
+            self.embed_video(video_path, s_ts, e_ts, num_frames)
+            for s_ts, e_ts in chunk_ranges
+        ]
+
+
     def embed_image(self, image_path: str) -> list[float]:
         return self._generate_vector(f"image:{image_path}")
 

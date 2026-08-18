@@ -89,6 +89,44 @@ class XCLIPEmbedder:
 
         return normalized.squeeze(0).cpu().tolist()
 
+    def embed_video_batch(
+        self,
+        video_path: str,
+        chunk_ranges: list[tuple[float, Optional[float]]],
+        batch_size: int = 8,
+        num_frames: int = 8,
+    ) -> list[list[float]]:
+        """Samples frames and computes normalized 512-d video embeddings in batched forward passes."""
+        if not chunk_ranges:
+            return []
+
+        all_vectors: list[list[float]] = []
+
+        for i in range(0, len(chunk_ranges), batch_size):
+            batch_slice = chunk_ranges[i : i + batch_size]
+            batch_frames = [
+                sample_frames_from_video(
+                    video_path=video_path,
+                    start_ts=s_ts,
+                    end_ts=e_ts,
+                    num_frames=num_frames,
+                )
+                for s_ts, e_ts in batch_slice
+            ]
+
+            inputs = self.processor(videos=batch_frames, return_tensors="pt")
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+
+            with torch.no_grad():
+                video_features = self.model.get_video_features(**inputs)
+                video_features = self._extract_tensor(video_features)
+                # L2 normalize
+                normalized = video_features / video_features.norm(p=2, dim=-1, keepdim=True)
+
+            all_vectors.extend(normalized.cpu().tolist())
+
+        return all_vectors
+
     def embed_image(self, image: str | Image.Image) -> list[float]:
         """Generate a 512-dim embedding for a single image / video frame."""
         if isinstance(image, str):

@@ -21,6 +21,17 @@ class EmbeddingBackend(Protocol):
         """Extracts and embeds frames from a video segment into a unit-normalized vector."""
         ...
 
+    def embed_video_batch(
+        self,
+        video_path: str,
+        chunk_ranges: list[tuple[float, Optional[float]]],
+        batch_size: int = 8,
+        num_frames: int = 8,
+    ) -> list[list[float]]:
+        """Extracts and embeds multiple video segments in parallel/batched forward passes."""
+        ...
+
+
     def embed_image(self, image_path: str) -> list[float]:
         """Embeds a still image into the shared video-text embedding space."""
         ...

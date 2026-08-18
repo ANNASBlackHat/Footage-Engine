@@ -114,3 +114,45 @@ def test_batch_processor_end_to_end(test_settings, test_storage, temp_dir):
     # 6. Re-run batch processor (must skip done items)
     stats2 = processor.process_all_pending()
     assert stats2["total"] == 0
+
+
+def test_batch_processor_parallel_workers(test_settings, test_storage):
+    init_db(test_settings.DATABASE_URL)
+    vector_store = InMemoryVectorStore()
+    embedder = MockEmbedder(dimension=512)
+
+    # Create 4 dummy pending items
+    item_ids = []
+    with get_db_session(test_settings.DATABASE_URL) as session:
+        for idx in range(4):
+            fname = f"parallel_clip_{idx}.mp4"
+            test_storage.save_file(b"dummy video content", fname)
+            item = MediaItem(
+                provider="pixabay",
+                source_url=f"https://example.com/{fname}",
+                storage_path=fname,
+                duration_sec=15.0,
+                status=MediaStatus.PENDING,
+            )
+            session.add(item)
+            session.flush()
+            item_ids.append(item.id)
+
+    processor = BatchProcessor(
+        settings=test_settings,
+        storage=test_storage,
+        embedder=embedder,
+        vector_store=vector_store,
+        database_url=test_settings.DATABASE_URL,
+    )
+
+    # Process all 4 items with 2 parallel workers
+    stats = processor.process_all_pending(max_workers=2)
+    assert stats["total"] == 4
+    assert stats["succeeded"] == 4
+    assert stats["failed"] == 0
+
+    with get_db_session(test_settings.DATABASE_URL) as session:
+        for iid in item_ids:
+            it = session.get(MediaItem, iid)
+            assert it.status == MediaStatus.DONE

@@ -15,13 +15,18 @@ def main():
     init_db(cfg.DATABASE_URL)
     vec_store = get_vector_store(cfg)
 
+    workers = int(os.environ.get("NUM_WORKERS") or os.environ.get("MAX_WORKERS") or cfg.PROCESS_NUM_WORKERS)
+    batch_size = int(os.environ.get("BATCH_SIZE") or os.environ.get("EMBEDDING_BATCH_SIZE") or cfg.EMBEDDING_BATCH_SIZE)
+
     print("=" * 80, flush=True)
-    print("🧠 Footage Engine — Batch Processor for Pending Footage", flush=True)
+    print("🧠 Footage Engine — High-Speed Batch Processor for Pending Footage", flush=True)
     print("=" * 80, flush=True)
-    print(f"• Database     : {cfg.DATABASE_URL}", flush=True)
-    print(f"• Storage      : {cfg.STORAGE_BACKEND} ({cfg.LOCAL_STORAGE_DIR})", flush=True)
-    print(f"• Vector Store : {cfg.VECTOR_STORE}", flush=True)
-    print(f"• Model        : {cfg.DEFAULT_EMBEDDING_MODEL} (Device: {cfg.EMBEDDING_DEVICE})", flush=True)
+    print(f"• Database       : {cfg.DATABASE_URL}", flush=True)
+    print(f"• Storage        : {cfg.STORAGE_BACKEND} ({cfg.LOCAL_STORAGE_DIR})", flush=True)
+    print(f"• Vector Store   : {cfg.VECTOR_STORE}", flush=True)
+    print(f"• Model & Device : {cfg.DEFAULT_EMBEDDING_MODEL} (Device: {cfg.EMBEDDING_DEVICE})", flush=True)
+    print(f"• Batch Size     : {batch_size} chunks / forward pass", flush=True)
+    print(f"• Worker Threads : {workers} parallel video worker(s)", flush=True)
     print("=" * 80, flush=True)
 
     limit = int(os.environ["LIMIT"]) if "LIMIT" in os.environ else None
@@ -32,7 +37,8 @@ def main():
     processor = fe.BatchProcessor(vector_store=vec_store)
     
     print("\n⏳ Finding and processing pending media items...", flush=True)
-    stats = processor.process_all_pending(limit=limit)
+    stats = processor.process_all_pending(limit=limit, max_workers=workers)
+
     
     elapsed = time.time() - start_time
     print("\n" + "=" * 80, flush=True)

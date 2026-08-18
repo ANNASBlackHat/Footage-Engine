@@ -1,4 +1,3 @@
-cargo ship, open ocean, ship bow, ocean waves, sailboat, container ship, stormy sea, deep blue, ship wake, sea 
-horizon, aerial coast, boat deck, cruise ship, rusty ship, sea foam, oil tanker, fishing vessel, nautical 
-rope, lighthouse, rough sea, anchor chain, calm sea, port harbor, sunset ocean, naval ship, wooden boat, ocean 
-mist, underwater hull, ship radar, sea breeze
+ship deck, ship bow, ship hull, ship stern, ship mast, ship anchor, ship rudder, ship propeller, ship helm, ship wheel, ship bridge, crows 
+nest, ship cabin, cargo hold, ship keel, ship funnel, porthole, ship rigging, forecastle, poop deck, anchor windlass, bollard, gangway, ship 
+railing, bulkheads, bilge, hawsehole, ship gunwale, capstan, starboard side

@@ -83,45 +83,55 @@ class BatchProcessor:
                 except Exception:
                     local_path = self.storage.get_local_path(item.source_url)
 
-                vector_records: list[VectorRecord] = []
-                for i, chunk in enumerate(chunks, 1):
-                    logger.info(f"Embedding chunk {chunk.id} [{chunk.start_ts}-{chunk.end_ts}]...")
-                    s_ts = f"{chunk.start_ts:.1f}s" if chunk.start_ts is not None else "0.0s"
-                    e_ts = f"{chunk.end_ts:.1f}s" if chunk.end_ts is not None else "0.0s"
-                    print(f"    → Embedding chunk {i}/{len(chunks)} ({s_ts} - {e_ts})...", flush=True)
-                    # Optional physical chunk slicing and upload to storage
-                    if self.settings.UPLOAD_CHUNKS_TO_STORAGE and item.media_type != MediaType.IMAGE and chunk.end_ts:
-                        try:
-                            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_chunk:
-                                tmp_chunk_path = tmp_chunk.name
-                            extract_video_clip(
-                                video_path=local_path,
-                                start_ts=chunk.start_ts,
-                                end_ts=chunk.end_ts,
-                                output_path=tmp_chunk_path,
-                            )
-                            if os.path.exists(tmp_chunk_path) and os.path.getsize(tmp_chunk_path) > 100:
-                                with open(tmp_chunk_path, "rb") as cf:
-                                    chunk_bytes = cf.read()
-                                chunk_filename = f"chunks/{item.id[:8]}_{chunk.id[:8]}.mp4"
-                                saved_path = self.storage.save_file(chunk_bytes, chunk_filename)
-                                chunk.storage_path = saved_path
-                                logger.info(f"Uploaded physical chunk {chunk.id} to {saved_path}")
-                        except Exception as ce:
-                            logger.warning(f"Failed to upload physical chunk {chunk.id}: {ce}")
-                        finally:
-                            if os.path.exists(tmp_chunk_path):
-                                os.remove(tmp_chunk_path)
+                # Optional physical chunk slicing and upload to storage
+                if self.settings.UPLOAD_CHUNKS_TO_STORAGE and item.media_type != MediaType.IMAGE:
+                    for chunk in chunks:
+                        if chunk.end_ts and not chunk.storage_path:
+                            try:
+                                with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_chunk:
+                                    tmp_chunk_path = tmp_chunk.name
+                                extract_video_clip(
+                                    video_path=local_path,
+                                    start_ts=chunk.start_ts,
+                                    end_ts=chunk.end_ts,
+                                    output_path=tmp_chunk_path,
+                                )
+                                if os.path.exists(tmp_chunk_path) and os.path.getsize(tmp_chunk_path) > 100:
+                                    with open(tmp_chunk_path, "rb") as cf:
+                                        chunk_bytes = cf.read()
+                                    chunk_filename = f"chunks/{item.id[:8]}_{chunk.id[:8]}.mp4"
+                                    saved_path = self.storage.save_file(chunk_bytes, chunk_filename)
+                                    chunk.storage_path = saved_path
+                                    logger.info(f"Uploaded physical chunk {chunk.id} to {saved_path}")
+                            except Exception as ce:
+                                logger.warning(f"Failed to upload physical chunk {chunk.id}: {ce}")
+                            finally:
+                                if os.path.exists(tmp_chunk_path):
+                                    os.remove(tmp_chunk_path)
 
-                    if item.media_type == MediaType.IMAGE:
-                        vec = self.embedder.embed_image(local_path)
-                    else:
-                        vec = self.embedder.embed_video(
+                # Compute embeddings (Batched forward passes)
+                print(f"    → Embedding {len(chunks)} chunk(s) (batch size: {self.settings.EMBEDDING_BATCH_SIZE})...", flush=True)
+                if item.media_type == MediaType.IMAGE:
+                    vecs = [self.embedder.embed_image(local_path) for _ in chunks]
+                elif hasattr(self.embedder, "embed_video_batch"):
+                    ranges = [(c.start_ts, c.end_ts) for c in chunks]
+                    vecs = self.embedder.embed_video_batch(
+                        video_path=local_path,
+                        chunk_ranges=ranges,
+                        batch_size=self.settings.EMBEDDING_BATCH_SIZE,
+                    )
+                else:
+                    vecs = [
+                        self.embedder.embed_video(
                             video_path=local_path,
-                            start_ts=chunk.start_ts,
-                            end_ts=chunk.end_ts,
+                            start_ts=c.start_ts,
+                            end_ts=c.end_ts,
                         )
+                        for c in chunks
+                    ]
 
+                vector_records: list[VectorRecord] = []
+                for chunk, vec in zip(chunks, vecs):
                     vector_id = chunk.id
                     chunk.vector_id = vector_id
                     vec_record = VectorRecord(
@@ -159,8 +169,14 @@ class BatchProcessor:
                 session.flush()
                 return False
 
-    def process_all_pending(self, limit: Optional[int] = None) -> dict[str, int]:
-        """Drains pending, chunking, or embedding media items in resumable batches."""
+    def process_all_pending(
+        self,
+        limit: Optional[int] = None,
+        max_workers: Optional[int] = None,
+    ) -> dict[str, int]:
+        """Drains pending, chunking, or embedding media items with parallel worker support."""
+        import concurrent.futures
+
         with get_db_session(self.database_url) as session:
             stmt = (
                 select(MediaItem.id)
@@ -179,14 +195,35 @@ class BatchProcessor:
                 stmt = stmt.limit(limit)
             item_ids = list(session.execute(stmt).scalars().all())
 
-        logger.info(f"Found {len(item_ids)} media items to process.")
+        workers = max_workers if max_workers is not None else self.settings.PROCESS_NUM_WORKERS
+        workers = max(1, min(workers, len(item_ids) or 1))
+
+        logger.info(f"Found {len(item_ids)} media items to process with {workers} worker(s).")
         stats = {"total": len(item_ids), "succeeded": 0, "failed": 0}
 
-        for iid in item_ids:
-            ok = self.process_item(iid)
-            if ok:
-                stats["succeeded"] += 1
-            else:
-                stats["failed"] += 1
+        if workers <= 1 or len(item_ids) <= 1:
+            # Sequential processing
+            for iid in item_ids:
+                ok = self.process_item(iid)
+                if ok:
+                    stats["succeeded"] += 1
+                else:
+                    stats["failed"] += 1
+        else:
+            # Parallel multi-worker processing
+            print(f"🚀 Processing {len(item_ids)} item(s) in parallel with {workers} worker threads...", flush=True)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+                future_to_id = {executor.submit(self.process_item, iid): iid for iid in item_ids}
+                for future in concurrent.futures.as_completed(future_to_id):
+                    iid = future_to_id[future]
+                    try:
+                        ok = future.result()
+                        if ok:
+                            stats["succeeded"] += 1
+                        else:
+                            stats["failed"] += 1
+                    except Exception as exc:
+                        logger.error(f"Worker generated an exception for {iid}: {exc}")
+                        stats["failed"] += 1
 
         return stats

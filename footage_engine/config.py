@@ -51,11 +51,14 @@ class Settings(BaseSettings):
     SLIDING_WINDOW_SEC: float = 10.0
     SLIDING_OVERLAP_RATIO: float = 0.5
 
-    # Embedding
+    # Embedding & Processing Performance
     DEFAULT_EMBEDDING_MODEL: str = "microsoft/xclip-base-patch32"
     DEFAULT_EMBEDDING_VERSION: str = "1.0"
     EMBEDDING_DIMENSION: int = 512
     EMBEDDING_DEVICE: str = "auto"  # 'auto', 'cuda', or 'cpu'
+    EMBEDDING_BATCH_SIZE: int = 8  # Chunks per forward pass (increase to 16 on Colab GPU)
+    PROCESS_NUM_WORKERS: int = 2  # Concurrent video processing threads (increase to 4 on Colab)
+
 
 
 @lru_cache()
