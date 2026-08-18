@@ -46,6 +46,8 @@ def main():
     # Providers to query (excluding YouTube)
     providers = ["pexels", "pixabay", "coverr"]
     max_per_kw = int(os.environ.get("MAX_RESULTS_PER_KEYWORD", "2"))
+    media_type = os.environ.get("MEDIA_TYPE", cfg.DEFAULT_MEDIA_TYPE).lower()
+    orientation = (os.environ.get("ORIENTATION") or os.environ.get("ASSET_ORIENTATION") or cfg.DEFAULT_ORIENTATION).lower()
 
     print("=" * 80, flush=True)
     print("🎬 Footage Engine — Multi-Keyword Ingestion (Pexels, Pixabay & Coverr)", flush=True)
@@ -53,6 +55,8 @@ def main():
     print(f"• Total unique keywords: {len(keywords)}", flush=True)
     print(f"• Providers to query   : {', '.join(providers).upper()}", flush=True)
     print(f"• Max items per search : {max_per_kw}", flush=True)
+    print(f"• Media type           : {media_type.upper()}", flush=True)
+    print(f"• Asset orientation    : {orientation.upper()}", flush=True)
     print(f"• Storage backend      : {cfg.STORAGE_BACKEND}", flush=True)
     print(f"• Vector store         : {cfg.VECTOR_STORE}", flush=True)
     print("=" * 80, flush=True)
@@ -69,7 +73,8 @@ def main():
                     keyword=kw,
                     provider=prov,
                     max_results=max_per_kw,
-                    media_type="video",
+                    media_type=media_type,
+                    orientation=orientation,
                 )
                 if items:
                     print(f"   ✓ {prov.upper():<8}: Ingested/found {len(items)} asset(s)", flush=True)

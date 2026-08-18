@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     YOUTUBE_COOKIES: str | None = None  # Local file path, URL, or raw Netscape/base64 cookie string
     YOUTUBE_COOKIES_FROM_BROWSER: str | None = None  # e.g. 'chrome', 'firefox', 'brave', 'safari'
 
+    # Ingestion & Provider Search Defaults
+    DEFAULT_MEDIA_TYPE: Literal["video", "image", "all"] = "video"
+    DEFAULT_ORIENTATION: Literal["landscape", "portrait", "square", "horizontal", "vertical", "all"] = "landscape"
+
+
 
     # Vector Database
     VECTOR_STORE: Literal["in_memory", "zilliz"] = "in_memory"

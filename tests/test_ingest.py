@@ -151,3 +151,87 @@ def test_ingest_from_provider_protocol(test_orchestrator, monkeypatch):
     assert items[0].provider == "stock_insight_ai"
     assert items[0].item_metadata.get("category") == "nature"
     assert items[1].source_id == "ext_002"
+
+
+def test_provider_orientation_and_media_type_handling(monkeypatch):
+    from footage_engine.sources.pixabay import PixabayAdapter
+    from footage_engine.sources.pexels import PexelsAdapter
+    from footage_engine.sources.coverr import CoverrAdapter
+
+    # 1. Pixabay video + orientation
+    pixabay = PixabayAdapter(api_key="fake_key")
+    captured_pixabay_params = {}
+
+    def mock_pixabay_get(url, params=None, **kwargs):
+        nonlocal captured_pixabay_params
+        captured_pixabay_params = params
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {"hits": []}
+        resp.raise_for_status = MagicMock()
+        return resp
+
+    monkeypatch.setattr("requests.get", mock_pixabay_get)
+    pixabay.search(keyword="sea", max_results=5, orientation="landscape", media_type="video")
+    assert captured_pixabay_params["orientation"] == "horizontal"
+    assert captured_pixabay_params["video_type"] == "all"
+
+    # 2. Pexels video + portrait orientation
+    pexels = PexelsAdapter(api_key="fake_key")
+    captured_pexels_params = {}
+
+    def mock_pexels_get(url, params=None, **kwargs):
+        nonlocal captured_pexels_params
+        captured_pexels_params = params
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {"videos": []}
+        resp.raise_for_status = MagicMock()
+        return resp
+
+    monkeypatch.setattr("requests.get", mock_pexels_get)
+    pexels.search(keyword="sea", max_results=5, orientation="vertical", media_type="video")
+    assert captured_pexels_params["orientation"] == "portrait"
+
+    # 3. Coverr client-side orientation filtering
+    coverr = CoverrAdapter(api_key="fake_key")
+    mock_coverr_response = {
+        "hits": [
+            {
+                "id": "cov_horiz",
+                "is_vertical": False,
+                "aspect_ratio": "16:9",
+                "urls": {"mp4": "https://cdn.coverr.co/horiz.mp4"},
+                "duration": 10.0,
+                "max_width": 1920,
+                "max_height": 1080,
+            },
+            {
+                "id": "cov_vert",
+                "is_vertical": True,
+                "aspect_ratio": "9:16",
+                "urls": {"mp4": "https://cdn.coverr.co/vert.mp4"},
+                "duration": 15.0,
+                "max_width": 1080,
+                "max_height": 1920,
+            },
+        ]
+    }
+
+    def mock_coverr_get(url, **kwargs):
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = mock_coverr_response
+        resp.raise_for_status = MagicMock()
+        return resp
+
+    monkeypatch.setattr("requests.get", mock_coverr_get)
+    # Search landscape only
+    cands_horiz = coverr.search(keyword="nature", max_results=5, orientation="landscape")
+    assert len(cands_horiz) == 1
+    assert cands_horiz[0].source_id == "cov_horiz"
+
+    # Search portrait only
+    cands_vert = coverr.search(keyword="nature", max_results=5, orientation="portrait")
+    assert len(cands_vert) == 1
+    assert cands_vert[0].source_id == "cov_vert"

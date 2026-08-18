@@ -17,17 +17,41 @@ class PexelsAdapter:
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or get_settings().PEXELS_API_KEY
 
-    def search(self, keyword: str, max_results: int = 20) -> list[Candidate]:
+    def _normalize_orientation(self, orientation: Optional[str]) -> str:
+        if not orientation:
+            return "landscape"
+        o = orientation.lower()
+        if o in ("landscape", "horizontal"):
+            return "landscape"
+        elif o in ("portrait", "vertical"):
+            return "portrait"
+        elif o == "square":
+            return "square"
+        return "all"
+
+    def search(
+        self,
+        keyword: str,
+        max_results: int = 20,
+        media_type: str = "video",
+        orientation: Optional[str] = "landscape",
+    ) -> list[Candidate]:
         if not self.api_key:
             raise ValueError(
                 "Pexels API key not found. Set PEXELS_API_KEY in environment or .env"
             )
 
+        if media_type in ("image", "photo"):
+            return self.search_photos(keyword=keyword, max_results=max_results, orientation=orientation)
+
+        norm_orientation = self._normalize_orientation(orientation)
         headers = {"Authorization": self.api_key}
         params = {
             "query": keyword,
             "per_page": min(max(max_results, 1), 80),
         }
+        if norm_orientation != "all":
+            params["orientation"] = norm_orientation
 
         try:
             resp = requests.get(self.BASE_URL, headers=headers, params=params, timeout=15)
@@ -42,7 +66,7 @@ class PexelsAdapter:
             video_id = str(video.get("id"))
             duration = float(video.get("duration", 0))
             video_files = video.get("video_files", [])
-            
+
             # Select preferred file (HD or SD with MP4 link)
             selected_file = None
             for vf in video_files:
@@ -80,16 +104,24 @@ class PexelsAdapter:
 
         return candidates
 
-    def search_photos(self, keyword: str, max_results: int = 20) -> list[Candidate]:
+    def search_photos(
+        self,
+        keyword: str,
+        max_results: int = 20,
+        orientation: Optional[str] = "landscape",
+    ) -> list[Candidate]:
         """Search Pexels for still photos/images."""
         if not self.api_key:
             raise ValueError("Pexels API key not found. Set PEXELS_API_KEY in environment or .env")
 
+        norm_orientation = self._normalize_orientation(orientation)
         headers = {"Authorization": self.api_key}
         params = {
             "query": keyword,
             "per_page": min(max(max_results, 1), 80),
         }
+        if norm_orientation != "all":
+            params["orientation"] = norm_orientation
 
         try:
             resp = requests.get("https://api.pexels.com/v1/search", headers=headers, params=params, timeout=15)

@@ -68,14 +68,10 @@ class Orchestrator:
         """Check database for exact duplicate match BEFORE any network download or storage write."""
         normalized_url = self._normalize_url(source_url)
         with get_db_session(self.database_url) as session:
-            stmt = select(MediaItem).where(
-                or_(
-                    (MediaItem.provider == provider) & (MediaItem.source_id == source_id)
-                    if source_id is not None
-                    else False,
-                    MediaItem.source_url == normalized_url,
-                )
-            )
+            conditions = [MediaItem.source_url == normalized_url]
+            if source_id is not None:
+                conditions.append((MediaItem.provider == provider) & (MediaItem.source_id == source_id))
+            stmt = select(MediaItem).where(or_(*conditions))
             item = session.execute(stmt).scalars().first()
             if item:
                 # Eagerly load attributes before session closes
@@ -117,17 +113,16 @@ class Orchestrator:
         # 1. Dedup check (Pre-spend)
         existing = self.find_existing(normalized_url, provider, source_id)
         if existing:
-            if existing.status == MediaStatus.DONE:
+            if existing.status != MediaStatus.FAILED:
                 logger.info(f"Duplicate found for {provider}:{source_id or normalized_url}. Returning existing MediaItem {existing.id}.")
                 return existing
             else:
-                # Existing item was failed or incomplete, delete and re-attempt ingestion
-                logger.info(f"Existing MediaItem {existing.id} was in {existing.status.value} status. Retrying ingestion...")
+                # Existing item was failed, delete and re-attempt ingestion
+                logger.info(f"Existing MediaItem {existing.id} was in FAILED status. Retrying ingestion...")
                 with get_db_session(self.database_url) as session:
                     db_item = session.get(MediaItem, existing.id)
                     if db_item:
                         session.delete(db_item)
-                        session.commit()
 
         storage_path = normalized_url
 
@@ -225,6 +220,7 @@ class Orchestrator:
         provider: str = "pixabay",
         max_results: int = 10,
         media_type: str = "video",
+        orientation: Optional[str] = None,
     ) -> list[MediaItem]:
         """Search a provider and ingest newly discovered media candidates."""
         adapter = self.adapters.get(provider)
@@ -233,10 +229,21 @@ class Orchestrator:
                 f"Unknown provider '{provider}'. Available: {list(self.adapters.keys())}"
             )
 
-        if provider == "pexels" and media_type == "image" and hasattr(adapter, "search_photos"):
-            candidates = adapter.search_photos(keyword=keyword, max_results=max_results)
+        eff_orientation = orientation or self.settings.DEFAULT_ORIENTATION
+        eff_media_type = media_type or self.settings.DEFAULT_MEDIA_TYPE
+
+        # Call adapter search passing keyword, max_results, media_type, and orientation
+        if hasattr(adapter, "search"):
+            import inspect
+            sig = inspect.signature(adapter.search)
+            kwargs = {"keyword": keyword, "max_results": max_results}
+            if "media_type" in sig.parameters:
+                kwargs["media_type"] = eff_media_type
+            if "orientation" in sig.parameters:
+                kwargs["orientation"] = eff_orientation
+            candidates = adapter.search(**kwargs)
         else:
-            candidates = adapter.search(keyword=keyword, max_results=max_results)
+            candidates = []
 
         results: list[MediaItem] = []
         for cand in candidates:
@@ -314,12 +321,14 @@ def search_and_ingest(
     provider: Literal["pixabay", "pexels", "coverr"] = "pixabay",
     max_results: int = 20,
     media_type: str = "video",
+    orientation: str | None = None,
 ) -> list[MediaItem]:
     return get_orchestrator().search_and_ingest(
         keyword=keyword,
         provider=provider,
         max_results=max_results,
         media_type=media_type,
+        orientation=orientation,
     )
 
 
