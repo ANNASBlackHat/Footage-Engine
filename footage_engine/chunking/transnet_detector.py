@@ -92,7 +92,7 @@ def detect_scenes_transnet(
     fps = meta.get("fps") or 25.0
     duration_sec = meta.get("duration_sec") or 0.0
 
-    if not scenes_frames:
+    if scenes_frames is None or len(scenes_frames) == 0:
         return [(0.0, float(duration_sec))]
 
     results: list[tuple[float, float]] = []
@@ -106,7 +106,7 @@ def detect_scenes_transnet(
         if (end_sec - start_sec) >= min_scene_len_sec:
             results.append((start_sec, end_sec))
 
-    if not results and duration_sec > 0:
+    if len(results) == 0 and duration_sec > 0:
         results.append((0.0, float(duration_sec)))
 
     return results
