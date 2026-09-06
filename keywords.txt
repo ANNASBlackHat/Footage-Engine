@@ -1,3 +1,4 @@
-ship deck, ship bow, ship hull, ship stern, ship mast, ship anchor, ship rudder, ship propeller, ship helm, ship wheel, ship bridge, crows 
-nest, ship cabin, cargo hold, ship keel, ship funnel, porthole, ship rigging, forecastle, poop deck, anchor windlass, bollard, gangway, ship 
-railing, bulkheads, bilge, hawsehole, ship gunwale, capstan, starboard side
+engine room, ship engine, marine diesel, propeller shaft, ship boiler, steam turbine, bilge pump, fuel injector, ship generator, crankshaft, 
+piston cylinder, gear box, heat exchanger, steering gear, exhaust manifold, water separator, valve manifold, pipe system, pressure gauge, 
+steam pipe, cooling system, turbocharger, mechanical pump, ball bearing, oil filter, drive shaft, ship condenser, throttle lever, hydraulic 
+ram, air compressor

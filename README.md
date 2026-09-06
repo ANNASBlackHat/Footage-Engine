@@ -45,6 +45,7 @@ footage-engine/
 │   ├── demo_narrative_search.py  # Multi-segment story search demo
 │   ├── find_ships.py             # Provider discovery script
 │   ├── ingest_found_assets.py    # Batch asset ingestion script
+│   ├── ingest_from_urls.py       # Ingest media from a file of URLs
 │   ├── ingest_story_footage.py   # Multi-provider narrative ingestion script
 │   └── test_live.py              # Quick provider API connectivity check
 ├── tests/                 # Automated unit and integration test suite
@@ -150,6 +151,18 @@ uv run python examples/demo.py
 ```bash
 # Ingest curated narrative assets from Pexels, Pixabay, and Coverr
 uv run python scripts/ingest_story_footage.py
+
+# Ingest media from a file containing URLs (plain text, markdown, HTML, etc.)
+uv run python scripts/ingest_from_urls.py urls.txt
+
+# Preview extracted URLs without ingesting
+uv run python scripts/ingest_from_urls.py urls.txt --dry-run
+
+# Limit to first N URLs and label the provider
+uv run python scripts/ingest_from_urls.py urls.txt --max 20 --provider wikimedia
+
+# Skip embedding processing (ingest only)
+SKIP_PROCESSING=1 uv run python scripts/ingest_from_urls.py urls.txt
 
 # Query narrative story segments with ranked retrieval and fine localization
 uv run python scripts/demo_narrative_search.py

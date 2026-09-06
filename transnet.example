@@ -1,0 +1,58 @@
+!pip install tensorflow -q
+!git clone https://github.com/soCzech/TransNetV2.git
+%cd TransNetV2/inference
+
+import sys
+sys.path.append('/content/TransNetV2/inference')
+from transnetv2 import TransNetV2
+
+model = TransNetV2()
+
+!pip uninstall ffmpeg ffmpeg-python -y -q
+!pip install ffmpeg-python -q
+
+import ffmpeg
+# We re-import to ensure the correct module is loaded
+import importlib
+importlib.reload(ffmpeg)
+
+video_path = "/content/The Terrifying Animals of the Polar Deep-256x144-avc1-mp4a.mp4"
+
+# Now the model should find ffmpeg.input correctly
+video_frames, single_frame_predictions, all_frame_predictions = model.predict_video(video_path)
+
+# scenes: list of (start_frame, end_frame) tuples
+scenes = model.predictions_to_scenes(single_frame_predictions)
+print(f"Detected {len(scenes)} scenes")
+
+# predictions_to_scenes defaults to threshold=0.5
+# Raise it to be MORE conservative (merge borderline cuts back into one clip)
+scenes_conservative = model.predictions_to_scenes(single_frame_predictions, threshold=0.7)
+print(f"threshold=0.5 -> {len(scenes)} scenes")
+print(f"threshold=0.7 -> {len(scenes_conservative)} scenes")
+
+# Try a few and compare counts before committing
+for t in [0.3, 0.5, 0.7, 0.9]:
+    s = model.predictions_to_scenes(single_frame_predictions, threshold=t)
+    print(f"threshold={t}: {len(s)} scenes")
+
+
+import cv2
+
+cap = cv2.VideoCapture(video_path)
+fps = cap.get(cv2.CAP_PROP_FPS)
+cap.release()
+
+scene_list_seconds = [(s / fps, e / fps) for s, e in scenes]
+for i, (start, end) in enumerate(scene_list_seconds):
+    print(f"Scene {i+1}: {start:.2f}s -> {end:.2f}s ({end-start:.2f}s)")
+
+
+import os
+output_dir = "/content/clips_transnet"
+os.makedirs(output_dir, exist_ok=True)
+
+for i, (start, end) in enumerate(scene_list_seconds):
+    out_path = f"{output_dir}/scene_{i+1:03d}.mp4"
+    os.system(f'ffmpeg -y -i "{video_path}" -ss {start:.3f} -to {end:.3f} '
+               f'-c:v libx264 -c:a aac "{out_path}" -loglevel error')
