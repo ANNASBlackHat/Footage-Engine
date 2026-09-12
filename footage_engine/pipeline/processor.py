@@ -31,13 +31,21 @@ class BatchProcessor:
         embedder: EmbeddingBackend | None = None,
         vector_store: VectorStore | None = None,
         database_url: str | None = None,
+        collection_name: str | None = None,
     ):
         self.settings = settings or get_settings()
         self.storage = storage or get_storage_backend(self.settings)
         self.embedder = embedder or get_embedder(self.settings)
         self.vector_store = vector_store or get_vector_store(self.settings)
         self.database_url = database_url or self.settings.DATABASE_URL
-        self.collection_name = self.settings.ZILLIZ_COLLECTION_NAME
+        if collection_name is not None:
+            self.collection_name = collection_name
+        elif self.embedder.model_name == self.settings.QWEN_MODEL_NAME:
+            self.collection_name = (
+                f"{self.settings.ZILLIZ_COLLECTION_NAME}{self.settings.QWEN_COLLECTION_SUFFIX}"
+            )
+        else:
+            self.collection_name = self.settings.ZILLIZ_COLLECTION_NAME
 
     def process_item(self, media_item_id: str) -> bool:
         """Processes a single MediaItem end-to-end. Returns True if succeeded."""
@@ -54,8 +62,10 @@ class BatchProcessor:
             logger.info(f"Processing MediaItem {item.id} (current status: {item.status.value})...")
 
             try:
-                # Step 1: Chunking
-                chunks = item.chunks
+                # Step 1: Chunking (scoped per embedding model so a second
+                # backend creates its own Chunk rows instead of reusing another
+                # model's rows)
+                chunks = [c for c in item.chunks if c.embedding_model == self.embedder.model_name]
                 if not chunks:
                     logger.info(f"Generating chunks for {item.id}...")
                     print(f"    → Generating chunks for {item.id}...", flush=True)
@@ -82,6 +92,15 @@ class BatchProcessor:
                     local_path = self.storage.get_local_path(item.storage_path)
                 except Exception:
                     local_path = self.storage.get_local_path(item.source_url)
+
+                # Auto-probe image resolution if missing
+                if not item.resolution and item.media_type in (MediaType.IMAGE, "image"):
+                    try:
+                        from PIL import Image
+                        with Image.open(local_path) as img:
+                            item.resolution = f"{img.width}x{img.height}"
+                    except Exception as e:
+                        logger.debug(f"Could not probe image resolution: {e}")
 
                 # Optional physical chunk slicing and upload to storage
                 if self.settings.UPLOAD_CHUNKS_TO_STORAGE and item.media_type != MediaType.IMAGE:

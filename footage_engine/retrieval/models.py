@@ -15,6 +15,17 @@ class SearchFilters:
     min_duration_sec: Optional[float] = None
     max_duration_sec: Optional[float] = None
     tags: Optional[list[str]] = None
+    orientation: Optional[str] = None  # "horizontal", "landscape", "vertical", "portrait", "square"
+
+    def __post_init__(self):
+        if self.orientation:
+            norm = self.orientation.lower().strip()
+            if norm in ("landscape", "horizontal"):
+                self.orientation = "horizontal"
+            elif norm in ("portrait", "vertical"):
+                self.orientation = "vertical"
+            elif norm == "square":
+                self.orientation = "square"
 
     def to_milvus_expr(self) -> str:
         """Converts filters into a Milvus/Zilliz scalar boolean expression."""

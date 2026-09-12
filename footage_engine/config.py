@@ -52,8 +52,12 @@ class Settings(BaseSettings):
     SLIDING_OVERLAP_RATIO: float = 0.5
 
     # Embedding & Processing Performance
+    EMBEDDING_BACKEND: Literal["xclip", "qwen"] = "xclip"
     DEFAULT_EMBEDDING_MODEL: str = "microsoft/xclip-base-patch32"
     DEFAULT_EMBEDDING_VERSION: str = "1.0"
+    QWEN_MODEL_NAME: str = "Qwen/Qwen3-VL-Embedding-2B"
+    QWEN_MODEL_VERSION: str = "1.0"
+    QWEN_COLLECTION_SUFFIX: str = "_qwen3_vl_2b"
     EMBEDDING_DIMENSION: int = 512
     EMBEDDING_DEVICE: str = "auto"  # 'auto', 'cuda', or 'cpu'
     EMBEDDING_BATCH_SIZE: int = 8  # Chunks per forward pass (increase to 16 on Colab GPU)

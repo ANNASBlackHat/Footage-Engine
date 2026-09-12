@@ -30,6 +30,21 @@ from footage_engine.storage.base import StorageBackend
 logger = logging.getLogger(__name__)
 
 
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tiff", ".avif", ".svg"}
+VIDEO_EXTENSIONS = {".mp4", ".webm", ".mov", ".mkv", ".avi", ".flv", ".wmv", ".m4v", ".ts"}
+
+
+def infer_media_type_from_url(url: str) -> Optional[str]:
+    """Infers media type ('image' or 'video') from the URL file extension."""
+    parsed = urllib.parse.urlparse(url)
+    ext = os.path.splitext(parsed.path)[1].lower()
+    if ext in IMAGE_EXTENSIONS:
+        return "image"
+    if ext in VIDEO_EXTENSIONS:
+        return "video"
+    return None
+
+
 class Orchestrator:
     """Coordinates ingestion, pre-spend dedup, raw downloading, and storage."""
 
@@ -86,12 +101,16 @@ class Orchestrator:
         source_id: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
         license_type: str = "unknown",
-        media_type: str = "video",
+        media_type: Optional[str] = None,
         duration_sec: Optional[float] = None,
         resolution: Optional[str] = None,
     ) -> MediaItem:
         """Idempotent ingestion. Returns existing MediaItem immediately if already ingested."""
         normalized_url = self._normalize_url(source_url)
+        if not media_type or media_type == "auto":
+            inferred = infer_media_type_from_url(normalized_url)
+            media_type = inferred or "video"
+
         if is_youtube_url(normalized_url):
             if provider in ("manual", "direct", "unknown"):
                 provider = "youtube"

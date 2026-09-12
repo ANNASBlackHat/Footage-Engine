@@ -51,6 +51,14 @@ class InMemoryVectorStore:
                     wanted_type = filter_expr.split('media_type == "')[1].split('"')[0]
                     if record.media_type != wanted_type:
                         continue
+                if "duration_sec >= " in filter_expr:
+                    min_d = float(filter_expr.split("duration_sec >= ")[1].split(" ")[0])
+                    if record.duration_sec is None or record.duration_sec < min_d:
+                        continue
+                if "duration_sec <= " in filter_expr:
+                    max_d = float(filter_expr.split("duration_sec <= ")[1].split(" ")[0])
+                    if record.duration_sec is None or record.duration_sec > max_d:
+                        continue
 
             sim = self._cosine_similarity(query_vector, record.vector)
             scored.append(

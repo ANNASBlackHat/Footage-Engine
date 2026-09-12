@@ -33,6 +33,21 @@ video = [
     "pillow>=10.0.0",
 ]
 
+mcp = [
+    "mcp>=1.2.0",
+]
+
+qwen = [
+    "sentence-transformers>=3.0.0",
+    "transformers>=4.57.0",
+    "torch>=2.1.0",
+    "pillow>=10.0.0",
+    "numpy>=1.24.0",
+]
+
+[project.scripts]
+footage-engine-mcp = "footage_engine.mcp.server:main"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["footage_engine*"]

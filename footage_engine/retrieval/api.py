@@ -36,13 +36,21 @@ class RetrievalAPI:
         embedder: EmbeddingBackend | None = None,
         vector_store: VectorStore | None = None,
         database_url: str | None = None,
+        collection_name: str | None = None,
     ):
         self.settings = settings or get_settings()
         self.storage = storage or get_storage_backend(self.settings)
         self.embedder = embedder or get_embedder(self.settings)
         self.vector_store = vector_store or get_vector_store(self.settings)
         self.database_url = database_url or self.settings.DATABASE_URL
-        self.collection_name = self.settings.ZILLIZ_COLLECTION_NAME
+        if collection_name is not None:
+            self.collection_name = collection_name
+        elif self.embedder.model_name == self.settings.QWEN_MODEL_NAME:
+            self.collection_name = (
+                f"{self.settings.ZILLIZ_COLLECTION_NAME}{self.settings.QWEN_COLLECTION_SUFFIX}"
+            )
+        else:
+            self.collection_name = self.settings.ZILLIZ_COLLECTION_NAME
 
     def search(
         self,
@@ -109,6 +117,22 @@ class RetrievalAPI:
                     last_used_at=chunk.last_used_at,
                     item_metadata=media_item.item_metadata or {},
                 )
+
+                # Post-hydration filtering (e.g. orientation, exact duration bounds)
+                if filters:
+                    if filters.orientation and res.orientation != filters.orientation:
+                        continue
+                    if filters.min_duration_sec is not None:
+                        if res.duration_sec is None or res.duration_sec < filters.min_duration_sec:
+                            continue
+                    if filters.max_duration_sec is not None:
+                        if res.duration_sec is None or res.duration_sec > filters.max_duration_sec:
+                            continue
+                    if filters.media_type and res.media_type != filters.media_type:
+                        continue
+                    if filters.provider and res.provider != filters.provider:
+                        continue
+
                 results.append(res)
 
             session.flush()

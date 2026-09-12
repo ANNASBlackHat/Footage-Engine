@@ -204,6 +204,87 @@ if results:
 
 ---
 
+## Model Context Protocol (MCP) Server
+
+Footage Retrieval Engine exposes its core capabilities through a built-in **Model Context Protocol (MCP)** server, enabling AI coding assistants and video production agents (Claude Desktop, Cursor, Antigravity, cline) to discover, search, localize, and ingest footage directly.
+
+### 1. Installation
+
+Install dependencies with the `mcp` extra:
+
+```bash
+uv pip install -e ".[dev,video,mcp]"
+# or using pip
+pip install -e ".[dev,video,mcp]"
+```
+
+### 2. Starting the Server
+
+```bash
+# Run over stdio (default, recommended for Claude Desktop / Cursor)
+uv run footage-engine-mcp
+
+# Run with MockEmbedder for instant offline testing (no neural network download)
+uv run footage-engine-mcp --mock
+
+# Run as an SSE HTTP service for remote agents
+uv run footage-engine-mcp --transport sse --host 0.0.0.0 --port 8000
+```
+
+### 3. Client Configuration
+
+#### Claude Desktop (`claude_desktop_config.json`)
+```json
+{
+  "mcpServers": {
+    "footage-engine": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/path/to/footage-engine",
+        "run",
+        "footage-engine-mcp"
+      ]
+    }
+  }
+}
+```
+
+#### Cursor (`.cursor/mcp.json`)
+```json
+{
+  "mcpServers": {
+    "footage-engine": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/path/to/footage-engine",
+        "run",
+        "footage-engine-mcp"
+      ]
+    }
+  }
+}
+```
+
+### 4. Exposed MCP Tools, Resources & Prompts
+
+| Type | Name | Description |
+|---|---|---|
+| **Tool** | `search_footage` | Natural language semantic search with filters for `media_type` ('video'/'image'), `orientation` ('landscape'/'horizontal' or 'vertical'/'portrait'), `min_duration`, `max_duration`, and `provider`. Returns ranked chunks with cut timestamps, aspect ratios, and storage URLs. |
+| **Tool** | `fine_localize_clip` | 1fps frame-level scoring inside a winning chunk to refine exact start/end cut points. |
+| **Tool** | `get_clip_details` | Full metadata, resolution, parent media info, and storage URL for a chunk. |
+| **Tool** | `get_media_item_details` | Full details for a raw media item and all its partitioned chunk segments. |
+| **Tool** | `ingest_url` | Direct URL / YouTube ingestion with pre-spend deduplication. |
+| **Tool** | `ingest_keywords` | Search stock providers (Pexels, Pixabay, Coverr) and ingest candidates. |
+| **Tool** | `process_pending_queue` | Batch process pending items through chunking and vector indexing. |
+| **Tool** | `get_library_stats` | Global stats on indexed assets, providers, and vector store backend. |
+| **Resource** | `footage://chunks/{chunk_id}` | JSON payload of chunk metadata and stream URL. |
+| **Resource** | `footage://stats` | Live library statistics. |
+| **Prompt** | `broll-match-beat` | Directorial prompt translating narration text into optimal visual search queries. |
+
+---
+
 ## Running Tests
 
 Run the test suite using pytest:
