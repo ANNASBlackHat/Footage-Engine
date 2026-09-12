@@ -30,7 +30,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--limit", type=int, default=None, help="Max media items to process.")
     ap.add_argument("--media-ids", default=None, help="Comma-separated MediaItem IDs (subset).")
     ap.add_argument("--dry-run", action="store_true", help="Report what would be done without writing.")
-    return ap.parse_args()
+    args, _unknown = ap.parse_known_args()  # tolerate kernel argv (e.g. Colab's -f flag)
+    return args
 
 
 def main() -> int:
@@ -40,7 +41,7 @@ def main() -> int:
 
     embedder = get_embedder(settings, backend="qwen")
     storage = get_storage_backend(settings)
-    vector_store = get_vector_store(settings)
+    vector_store = get_vector_store(settings, backend="qwen")
     collection = collection_name_for(settings, "qwen")
     print(f"Qwen backfill: model={embedder.model_name} dim={embedder.dimension} collection={collection}")
 
@@ -62,84 +63,90 @@ def main() -> int:
         return 0
 
     total_new = 0
-    for iid in item_ids:
-        with get_db_session(settings.DATABASE_URL) as session:
-            item = session.get(MediaItem, iid)
-            if not item:
-                continue
-            src_ranges = [
-                (c.start_ts, c.end_ts)
-                for c in item.chunks
-                if c.embedding_model == settings.DEFAULT_EMBEDDING_MODEL
-            ]
-            if not src_ranges and item.chunks:
-                # Fall back to any existing ranges (e.g. processed under another model name)
-                src_ranges = [(c.start_ts, c.end_ts) for c in item.chunks]
-            done_ranges = {
-                (c.start_ts, c.end_ts)
-                for c in item.chunks
-                if c.embedding_model == embedder.model_name
-            }
-            missing = [r for r in src_ranges if r not in done_ranges]
-            print(f"[{item.id[:8]}] {item.media_type.value} ranges={len(src_ranges)} missing_qwen={len(missing)}")
-
-            if not missing:
-                continue
-            if args.dry_run:
-                total_new += len(missing)
-                continue
-
-            try:
-                local_path = storage.get_local_path(item.storage_path)
-            except Exception:
-                local_path = storage.get_local_path(item.source_url)
-
-            if item.media_type == MediaType.IMAGE:
-                vecs = [embedder.embed_image(local_path) for _ in missing]
-            elif hasattr(embedder, "embed_video_batch"):
-                vecs = embedder.embed_video_batch(
-                    video_path=local_path,
-                    chunk_ranges=missing,
-                    batch_size=settings.EMBEDDING_BATCH_SIZE,
-                )
-            else:
-                vecs = [
-                    embedder.embed_video(video_path=local_path, start_ts=s, end_ts=e)
-                    for s, e in missing
+    failed = 0
+    for n, iid in enumerate(item_ids, 1):
+        try:
+            with get_db_session(settings.DATABASE_URL) as session:
+                item = session.get(MediaItem, iid)
+                if not item:
+                    continue
+                src_ranges = [
+                    (c.start_ts, c.end_ts)
+                    for c in item.chunks
+                    if c.embedding_model == settings.DEFAULT_EMBEDDING_MODEL
                 ]
+                if not src_ranges and item.chunks:
+                    # Fall back to any existing ranges (e.g. processed under another model name)
+                    src_ranges = [(c.start_ts, c.end_ts) for c in item.chunks]
+                done_ranges = {
+                    (c.start_ts, c.end_ts)
+                    for c in item.chunks
+                    if c.embedding_model == embedder.model_name
+                }
+                missing = [r for r in src_ranges if r not in done_ranges]
+                print(f"[{item.id[:8]}] ({n}/{len(item_ids)}) {item.media_type.value} "
+                      f"ranges={len(src_ranges)} missing_qwen={len(missing)}")
 
-            records: list[VectorRecord] = []
-            for (s_ts, e_ts), vec in zip(missing, vecs):
-                chunk = Chunk(
-                    media_item_id=item.id,
-                    start_ts=s_ts,
-                    end_ts=e_ts,
-                    media_type=item.media_type,
-                    embedding_model=embedder.model_name,
-                    embedding_version=embedder.version,
-                )
-                session.add(chunk)
-                session.flush()  # assign chunk.id
-                chunk.vector_id = chunk.id
-                records.append(
-                    VectorRecord(
-                        id=chunk.id,
-                        vector=vec,
-                        chunk_id=chunk.id,
-                        media_item_id=item.id,
-                        provider=item.provider,
-                        media_type=chunk.media_type.value,
-                        duration_sec=e_ts - s_ts if e_ts else None,
-                        embedding_model=chunk.embedding_model,
-                        embedding_version=chunk.embedding_version,
+                if not missing:
+                    continue
+                if args.dry_run:
+                    total_new += len(missing)
+                    continue
+
+                try:
+                    local_path = storage.get_local_path(item.storage_path)
+                except Exception:
+                    local_path = storage.get_local_path(item.source_url)
+
+                if item.media_type == MediaType.IMAGE:
+                    vecs = [embedder.embed_image(local_path) for _ in missing]
+                elif hasattr(embedder, "embed_video_batch"):
+                    vecs = embedder.embed_video_batch(
+                        video_path=local_path,
+                        chunk_ranges=missing,
+                        batch_size=settings.EMBEDDING_BATCH_SIZE,
                     )
-                )
-            vector_store.upsert(collection, records)
-            session.flush()
-            total_new += len(records)
-            print(f"[{item.id[:8]}] indexed {len(records)} Qwen vector(s).")
+                else:
+                    vecs = [
+                        embedder.embed_video(video_path=local_path, start_ts=s, end_ts=e)
+                        for s, e in missing
+                    ]
 
-    print(f"{'Would create' if args.dry_run else 'Created'} {total_new} Qwen chunk(s).")
+                records: list[VectorRecord] = []
+                for (s_ts, e_ts), vec in zip(missing, vecs):
+                    chunk = Chunk(
+                        media_item_id=item.id,
+                        start_ts=s_ts,
+                        end_ts=e_ts,
+                        media_type=item.media_type,
+                        embedding_model=embedder.model_name,
+                        embedding_version=embedder.version,
+                    )
+                    session.add(chunk)
+                    session.flush()  # assign chunk.id
+                    chunk.vector_id = chunk.id
+                    records.append(
+                        VectorRecord(
+                            id=chunk.id,
+                            vector=vec,
+                            chunk_id=chunk.id,
+                            media_item_id=item.id,
+                            provider=item.provider,
+                            media_type=chunk.media_type.value,
+                            duration_sec=e_ts - s_ts if e_ts else None,
+                            embedding_model=chunk.embedding_model,
+                            embedding_version=chunk.embedding_version,
+                        )
+                    )
+                vector_store.upsert(collection, records)
+                session.flush()
+                total_new += len(records)
+                print(f"[{item.id[:8]}] ({n}/{len(item_ids)}) indexed {len(records)} Qwen vector(s).")
+        except Exception as e:
+            failed += 1
+            print(f"[{iid[:8]}] ({n}/{len(item_ids)}) FAILED, skipping: {type(e).__name__}: {e}")
+
+    print(f"{'Would create' if args.dry_run else 'Created'} {total_new} Qwen chunk(s), {failed} failed.")
     return 0
 
 

@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from footage_engine.chunking.detector import create_chunks_in_db, extract_video_clip, preprocess_media
 from footage_engine.config import Settings, get_settings
-from footage_engine.embeddings import get_embedder
+from footage_engine.embeddings import backend_for, collection_name_for, get_embedder
 from footage_engine.embeddings.base import EmbeddingBackend
 from footage_engine.models.db import get_db_session
 from footage_engine.models.media import Chunk, MediaItem, MediaStatus, MediaType
@@ -36,16 +36,13 @@ class BatchProcessor:
         self.settings = settings or get_settings()
         self.storage = storage or get_storage_backend(self.settings)
         self.embedder = embedder or get_embedder(self.settings)
-        self.vector_store = vector_store or get_vector_store(self.settings)
+        self.backend = backend_for(self.settings, self.embedder)
+        self.vector_store = vector_store or get_vector_store(self.settings, backend=self.backend)
         self.database_url = database_url or self.settings.DATABASE_URL
         if collection_name is not None:
             self.collection_name = collection_name
-        elif self.embedder.model_name == self.settings.QWEN_MODEL_NAME:
-            self.collection_name = (
-                f"{self.settings.ZILLIZ_COLLECTION_NAME}{self.settings.QWEN_COLLECTION_SUFFIX}"
-            )
         else:
-            self.collection_name = self.settings.ZILLIZ_COLLECTION_NAME
+            self.collection_name = collection_name_for(self.settings, self.backend)
 
     def process_item(self, media_item_id: str) -> bool:
         """Processes a single MediaItem end-to-end. Returns True if succeeded."""

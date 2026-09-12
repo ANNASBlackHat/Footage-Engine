@@ -120,7 +120,11 @@ Configure your `.env` file according to the options defined in `.env.example` / 
 | `ZILLIZ_URI` | string | Zilliz Cloud / Milvus cluster URI |
 | `ZILLIZ_TOKEN` | string | Zilliz Cloud API token |
 | `ZILLIZ_COLLECTION_NAME`| string | Name of Milvus collection for chunk embeddings |
+| `QWEN_ZILLIZ_URI` | string | Dedicated Qwen cluster URI (falls back to `ZILLIZ_URI`) |
+| `QWEN_ZILLIZ_TOKEN` | string | Dedicated Qwen cluster token (falls back to `ZILLIZ_TOKEN`) |
+| `QWEN_ZILLIZ_COLLECTION_NAME` | string | Qwen collection (falls back to `ZILLIZ_COLLECTION_NAME`) |
 | **Embedding Model** | | |
+| `EMBEDDING_BACKEND` | `xclip` / `qwen` | Active embedding backend (default `xclip`) |
 | `DEFAULT_EMBEDDING_MODEL` | `microsoft/xclip-base-patch32` | HuggingFace multimodal model name |
 | `DEFAULT_EMBEDDING_VERSION` | `1.0` | Model version tag stored with indexed vectors |
 | `EMBEDDING_DIMENSION` | `512` | Vector embedding dimension size |

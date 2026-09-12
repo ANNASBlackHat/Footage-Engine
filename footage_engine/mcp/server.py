@@ -66,7 +66,7 @@ def create_mcp_server(
         else:
             embedder = get_embedder(settings)
 
-    vector_store = vector_store or get_vector_store(settings)
+    vector_store = vector_store or get_vector_store(settings, backend=settings.EMBEDDING_BACKEND)
 
     retrieval_api = RetrievalAPI(
         settings=settings,

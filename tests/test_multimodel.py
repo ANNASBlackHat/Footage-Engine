@@ -3,12 +3,13 @@
 All tests use MockEmbedder + InMemoryVectorStore: no model downloads, no GPU.
 """
 
-from footage_engine.embeddings import collection_name_for
+from footage_engine.embeddings import backend_for, collection_name_for
 from footage_engine.embeddings.mock import MockEmbedder
 from footage_engine.models.db import get_db_session, init_db
 from footage_engine.models.media import Chunk, MediaItem, MediaStatus, MediaType
 from footage_engine.pipeline.processor import BatchProcessor
 from footage_engine.retrieval.api import RetrievalAPI
+from footage_engine.vector import zilliz_creds_for
 from footage_engine.vector.in_memory import InMemoryVectorStore
 
 
@@ -31,9 +32,29 @@ def test_collection_name_for(test_settings):
     base = test_settings.ZILLIZ_COLLECTION_NAME
     assert collection_name_for(test_settings, "xclip") == base
     assert collection_name_for(test_settings, None) == base  # default backend is xclip
-    qwen_col = collection_name_for(test_settings, "qwen")
-    assert qwen_col == base + test_settings.QWEN_COLLECTION_SUFFIX
-    assert qwen_col != base
+    # No explicit Qwen collection -> falls back to base name (dedicated cluster case)
+    assert collection_name_for(test_settings, "qwen") == base
+    test_settings.QWEN_ZILLIZ_COLLECTION_NAME = "footage_chunks_qwen"
+    assert collection_name_for(test_settings, "qwen") == "footage_chunks_qwen"
+
+
+def test_backend_for_and_zilliz_creds(test_settings):
+    xclip_like = MockEmbedder(model_name="mock-xclip", dimension=512)
+    qwen_like = MockEmbedder(model_name=test_settings.QWEN_MODEL_NAME, dimension=2048)
+    assert backend_for(test_settings, xclip_like) == "xclip"
+    assert backend_for(test_settings, qwen_like) == "qwen"
+
+    test_settings.ZILLIZ_URI = "https://base.example.com"
+    test_settings.ZILLIZ_TOKEN = "base-token"
+    test_settings.QWEN_ZILLIZ_URI = None
+    test_settings.QWEN_ZILLIZ_TOKEN = None
+    assert zilliz_creds_for(test_settings, "xclip") == ("https://base.example.com", "base-token")
+    # Qwen falls back to base when QWEN_* unset ...
+    assert zilliz_creds_for(test_settings, "qwen") == ("https://base.example.com", "base-token")
+    # ... and uses dedicated values when set
+    test_settings.QWEN_ZILLIZ_URI = "https://qwen.example.com"
+    test_settings.QWEN_ZILLIZ_TOKEN = "qwen-token"
+    assert zilliz_creds_for(test_settings, "qwen") == ("https://qwen.example.com", "qwen-token")
 
 
 def test_processor_and_retrieval_collection_resolution(test_settings, test_storage):

@@ -57,7 +57,11 @@ class Settings(BaseSettings):
     DEFAULT_EMBEDDING_VERSION: str = "1.0"
     QWEN_MODEL_NAME: str = "Qwen/Qwen3-VL-Embedding-2B"
     QWEN_MODEL_VERSION: str = "1.0"
-    QWEN_COLLECTION_SUFFIX: str = "_qwen3_vl_2b"
+    # Dedicated Qwen vector cluster. Each falls back to the base ZILLIZ_*
+    # value when empty, so a single-cluster setup needs no extra config.
+    QWEN_ZILLIZ_URI: str | None = None
+    QWEN_ZILLIZ_TOKEN: str | None = None
+    QWEN_ZILLIZ_COLLECTION_NAME: str | None = None
     EMBEDDING_DIMENSION: int = 512
     EMBEDDING_DEVICE: str = "auto"  # 'auto', 'cuda', or 'cpu'
     EMBEDDING_BATCH_SIZE: int = 8  # Chunks per forward pass (increase to 16 on Colab GPU)
