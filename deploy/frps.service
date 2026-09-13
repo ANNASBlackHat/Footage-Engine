@@ -1,7 +1,7 @@
 # systemd unit for frps — /etc/systemd/system/frps.service
 # Install: download frps release, then
-#   cp frps /usr/local/bin/ && mkdir -p /etc/frp && cp deploy/frps.ini /etc/frp/
-#   # put your token in /etc/frp/frps.ini (token = ...)
+#   cp frps /usr/local/bin/ && mkdir -p /etc/frp && cp deploy/frps.toml /etc/frp/
+#   # put your token in /etc/frp/frps.toml (both REPLACE_ME_TOKEN spots)
 #   systemctl daemon-reload && systemctl enable --now frps
 
 [Unit]
@@ -10,7 +10,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/frps -c /etc/frp/frps.ini
+ExecStart=/usr/local/bin/frps -c /etc/frp/frps.toml
 Restart=always
 RestartSec=5
 

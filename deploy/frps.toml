@@ -1,0 +1,20 @@
+# frps (server side) — lives on your VPS, e.g. /etc/frp/frps.toml
+# Keys follow the canonical frp v0.69 TOML format. Replace both
+# REPLACE_ME_TOKEN values with the same long random secret (also used as
+# FRP_AUTH_TOKEN on the Colab side).
+# Only port 7000 must be reachable from the internet; the dashboard stays
+# on localhost (view it via `ssh -L 17500:localhost:17500 vps`).
+
+bindPort = 7000
+
+# HTTP vhost for tunneled services; nginx reverse-proxies to this port
+# so public TLS terminates on your VPS, not on Colab.
+vhostHTTPPort = 18080
+
+auth.method = "token"
+auth.token = "REPLACE_ME_TOKEN"
+
+webServer.addr = "127.0.0.1"
+webServer.port = 17500
+webServer.user = "admin"
+webServer.password = "REPLACE_ME_TOKEN"

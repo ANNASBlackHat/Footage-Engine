@@ -22,8 +22,8 @@ Colab GPU (ephemeral)                    Your VPS (stable)
    `github.com/fatedier/frp`, then:
    ```bash
    cp frps /usr/local/bin/ && mkdir -p /etc/frp
-   cp deploy/frps.ini /etc/frp/frps.ini
-   # edit /etc/frp/frps.ini — set a long random `token`
+   cp deploy/frps.toml /etc/frp/frps.toml
+   # edit /etc/frp/frps.toml — set both REPLACE_ME_TOKEN spots
    cp deploy/frps.service /etc/systemd/system/frps.service
    systemctl daemon-reload && systemctl enable --now frps
    ufw allow 7000/tcp && ufw allow 80,443/tcp
