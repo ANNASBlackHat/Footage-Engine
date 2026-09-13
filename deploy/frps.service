@@ -1,0 +1,18 @@
+# systemd unit for frps — /etc/systemd/system/frps.service
+# Install: download frps release, then
+#   cp frps /usr/local/bin/ && mkdir -p /etc/frp && cp deploy/frps.ini /etc/frp/
+#   # put your token in /etc/frp/frps.ini (token = ...)
+#   systemctl daemon-reload && systemctl enable --now frps
+
+[Unit]
+Description=frp server (stable tunnels for footage-engine MCP)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/frps -c /etc/frp/frps.ini
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
