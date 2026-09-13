@@ -33,7 +33,7 @@ import tarfile
 import time
 import urllib.request
 
-FRP_VERSION = os.environ.get("FRP_VERSION", "0.61.0")
+FRP_VERSION = os.environ.get("FRP_VERSION", "0.69.1")
 GIT_URL = os.environ.get("GIT_URL", "https://github.com/ANNASBlackHat/Footage-Engine.git")
 GIT_BRANCH = os.environ.get("GIT_BRANCH", "main")
 BACKEND = os.environ.get("EMBEDDING_BACKEND", "qwen")
