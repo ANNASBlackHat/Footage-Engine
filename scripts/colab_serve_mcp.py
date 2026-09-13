@@ -41,7 +41,7 @@ MCP_PORT = os.environ.get("MCP_PORT", "8000")
 
 
 def need(name: str) -> str:
-    val = os.environ.get(name)
+    val = (os.environ.get(name) or "").strip()
     if not val:
         sys.exit(f"[serve] ERROR: set {name} env var first.")
     return val
@@ -115,16 +115,16 @@ def main() -> int:
         shutil.move(extracted, frpc)
         os.chmod(frpc, 0o755)
 
-    # 4. frpc config (token injected — never written to the repo)
-    with open(os.path.join(workdir, "frpc.ini"), "w") as f:
-        f.write("[common]\n"
-                f"serverAddr = {frps_host}\n"
-                "serverPort = 7000\n"
-                f"token = {token}\n"
-                "\n[mcp]\n"
-                "type = http\n"
-                f"localPort = {MCP_PORT}\n"
-                f"customDomains = {subdomain}\n")
+    # 4. frpc config (YAML — INI is deprecated; token injected, never committed)
+    frpc_cfg = os.path.join(workdir, "frpc.yaml")
+    with open(frpc_cfg, "w") as f:
+        f.write("serverAddr: %s\nserverPort: 7000\n"
+                "auth:\n  token: %s\n"
+                "proxies:\n  - name: mcp\n    type: http\n"
+                "    localPort: %d\n    customDomains: [%s]\n"
+                % (frps_host, token, int(MCP_PORT), subdomain))
+    print(f"[serve] frpc config: server={frps_host}:7000 domain={subdomain} "
+          f"localPort={MCP_PORT}", flush=True)
 
     env = dict(os.environ, PYTHONPATH=repo_dir, EMBEDDING_BACKEND=BACKEND)
     mcp_log = open(os.path.join(workdir, "mcp.log"), "a")
@@ -135,9 +135,18 @@ def main() -> int:
          "--backend", BACKEND],
         cwd=repo_dir, env=env, stdout=mcp_log, stderr=subprocess.STDOUT)
     time.sleep(15)  # let the model load before exposing the tunnel
+    if mcp.poll() is not None:
+        sys.exit("[serve] ERROR: MCP exited during startup, see "
+                 f"{workdir}/mcp.log")
     frpc_proc = subprocess.Popen(
-        [frpc, "-c", os.path.join(workdir, "frpc.ini")],
+        [frpc, "-c", frpc_cfg],
         stdout=frp_log, stderr=subprocess.STDOUT)
+    time.sleep(5)  # fail fast on config/auth errors instead of serving half-dead
+    if frpc_proc.poll() is not None:
+        with open(os.path.join(workdir, "frpc.log")) as f:
+            tail = "".join(f.readlines()[-15:])
+        mcp.terminate()
+        sys.exit(f"[serve] ERROR: frpc exited immediately. frpc.log tail:\n{tail}")
 
     print(f"[serve] MCP (pid {mcp.pid}) + frpc (pid {frpc_proc.pid}) running.", flush=True)
     print(f"[serve] STABLE URL: https://{subdomain}/mcp", flush=True)
