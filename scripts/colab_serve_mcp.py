@@ -47,6 +47,30 @@ def need(name: str) -> str:
     return val
 
 
+# Secrets the MCP server itself needs (Colab: left panel -> Secrets (key icon),
+# enable "Notebook access" for each). Same values as your local `.env`.
+REQUIRED_SECRETS = [
+    "DATABASE_URL",
+    "VECTOR_STORE",
+    "ZILLIZ_URI",
+    "ZILLIZ_TOKEN",
+    "ZILLIZ_COLLECTION_NAME",
+    "QWEN_ZILLIZ_URI",
+    "QWEN_ZILLIZ_TOKEN",
+    "QWEN_ZILLIZ_COLLECTION_NAME",
+    "IMAGEKIT_PUBLIC_KEY",
+    "IMAGEKIT_PRIVATE_KEY",
+    "IMAGEKIT_URL_ENDPOINT",
+]
+
+
+def check_secrets() -> None:
+    missing = [k for k in REQUIRED_SECRETS if not os.environ.get(k)]
+    if missing:
+        sys.exit("[serve] ERROR: missing secrets (add them under Colab Secrets "
+                 "with Notebook access enabled): " + ", ".join(missing))
+
+
 def sh(*cmd: str) -> None:
     print(f"$ {' '.join(cmd)}", flush=True)
     subprocess.check_call(list(cmd))
@@ -61,6 +85,7 @@ def main() -> int:
     token = need("FRP_AUTH_TOKEN")
     frps_host = need("FRPS_HOST")
     subdomain = need("MCP_SUBDOMAIN")
+    check_secrets()
     workdir = "/content/serve"
     os.makedirs(workdir, exist_ok=True)
 
