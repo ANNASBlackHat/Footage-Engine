@@ -46,6 +46,26 @@ class Settings(BaseSettings):
     ZILLIZ_TOKEN: str | None = None
     ZILLIZ_COLLECTION_NAME: str = "footage_chunks"
 
+    # LLM & Multi-Query Expansion / Optional Reranking (OpenAI-compatible)
+    LLM_API_KEY: str | None = None
+    GEMINI_API_KEY: str | None = None
+    OPENAI_API_KEY: str | None = None
+    LLM_BASE_URL: str | None = None  # e.g. "https://generativelanguage.googleapis.com/v1beta/openai/" or None
+    LLM_MODEL: str = "gemini-2.0-flash"
+
+    @property
+    def effective_llm_api_key(self) -> str | None:
+        return self.LLM_API_KEY or self.GEMINI_API_KEY or self.OPENAI_API_KEY
+
+    @property
+    def effective_llm_base_url(self) -> str:
+        if self.LLM_BASE_URL:
+            return self.LLM_BASE_URL.rstrip("/")
+        # Auto-detect base URL based on key or model name
+        if self.GEMINI_API_KEY or "gemini" in (self.LLM_MODEL or "").lower():
+            return "https://generativelanguage.googleapis.com/v1beta/openai"
+        return "https://api.openai.com/v1"
+
     # Chunking & Preprocessing Thresholds
     CHUNK_THRESHOLD_SEC: float = 45.0
     SLIDING_WINDOW_SEC: float = 10.0

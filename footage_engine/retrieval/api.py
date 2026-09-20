@@ -13,6 +13,7 @@ from footage_engine.embeddings.base import EmbeddingBackend
 from footage_engine.entities import EntityResolver
 from footage_engine.models.db import get_db_session
 from footage_engine.models.media import Chunk, MediaItem, MediaType, utc_now
+from footage_engine.retrieval.llm import LLMClient, LLMJudge, QueryExpander
 from footage_engine.retrieval.models import ChunkResult, SearchFilters
 from footage_engine.storage import get_storage_backend
 from footage_engine.storage.base import StorageBackend
@@ -38,6 +39,8 @@ class RetrievalAPI:
         vector_store: VectorStore | None = None,
         database_url: str | None = None,
         collection_name: str | None = None,
+        query_expander: Optional[QueryExpander] = None,
+        llm_judge: Optional[LLMJudge] = None,
     ):
         self.settings = settings or get_settings()
         self.storage = storage or get_storage_backend(self.settings)
@@ -46,6 +49,8 @@ class RetrievalAPI:
         self.vector_store = vector_store or get_vector_store(self.settings, backend=self.backend)
         self.database_url = database_url or self.settings.DATABASE_URL
         self.entity_resolver = EntityResolver(database_url=self.database_url)
+        self.query_expander = query_expander or QueryExpander(client=LLMClient(self.settings))
+        self.llm_judge = llm_judge or LLMJudge(client=LLMClient(self.settings))
         if collection_name is not None:
             self.collection_name = collection_name
         else:
@@ -147,6 +152,78 @@ class RetrievalAPI:
             session.flush()
 
         return results
+
+    def search_beat(
+        self,
+        beat_text: str,
+        top_k: int = 10,
+        filters: Optional[SearchFilters] = None,
+        rerank: bool = False,
+        confidence_floor: Optional[float] = None,
+    ) -> list[ChunkResult]:
+        """Performs multi-query expansion on a narrative script beat, executes vector search across queries,
+
+        merges & deduplicates candidates by similarity score, and optionally applies an LLM judge reranker.
+        """
+        # 1. Multi-Query expansion
+        expanded = self.query_expander.expand_beat(beat_text)
+        logger.info(
+            f"Expanded beat '{beat_text[:50]}...' into {len(expanded.queries)} queries. "
+            f"Detected entity: {expanded.detected_entity}"
+        )
+
+        # Base filters copy
+        eff_filters = SearchFilters(
+            media_type=filters.media_type if filters else None,
+            orientation=filters.orientation if filters else None,
+            min_duration_sec=filters.min_duration_sec if filters else None,
+            max_duration_sec=filters.max_duration_sec if filters else None,
+            provider=filters.provider if filters else None,
+            entity_id=filters.entity_id if filters else None,
+            entity_name=filters.entity_name if filters else expanded.detected_entity,
+        )
+
+        # 2. Vector search across all generated queries
+        candidate_pool: dict[str, ChunkResult] = {}
+
+        for i, q in enumerate(expanded.queries):
+            # Try searching with entity scope if available
+            hits = self.search(query=q, top_k=top_k, filters=eff_filters)
+
+            # If entity filter returned 0 hits, fall back to searching without entity
+            if not hits and eff_filters.entity_name:
+                fallback_filters = SearchFilters(
+                    media_type=eff_filters.media_type,
+                    orientation=eff_filters.orientation,
+                    min_duration_sec=eff_filters.min_duration_sec,
+                    max_duration_sec=eff_filters.max_duration_sec,
+                    provider=eff_filters.provider,
+                )
+                hits = self.search(query=q, top_k=top_k, filters=fallback_filters)
+
+            for hit in hits:
+                if hit.chunk_id not in candidate_pool:
+                    candidate_pool[hit.chunk_id] = hit
+                else:
+                    if hit.score > candidate_pool[hit.chunk_id].score:
+                        candidate_pool[hit.chunk_id] = hit
+
+        # 3. Sort merged candidates descending by vector similarity score
+        merged = sorted(candidate_pool.values(), key=lambda x: x.score, reverse=True)
+
+        # 4. Optional LLM Judge reranking
+        if rerank and merged:
+            merged = self.llm_judge.judge_and_rerank(
+                beat_text=beat_text,
+                candidates=merged,
+                top_n=min(top_k, len(merged)),
+            )
+
+        # 5. Optional confidence floor
+        if confidence_floor is not None:
+            merged = [c for c in merged if c.score >= confidence_floor]
+
+        return merged[:top_k]
 
     def get_chunk(self, chunk_id: str) -> Optional[ChunkResult]:
         """Retrieves a single chunk by ID with hydrated metadata."""
@@ -290,6 +367,22 @@ def search(
     filters: SearchFilters | None = None,
 ) -> list[ChunkResult]:
     return get_retrieval_api().search(query=query, top_k=top_k, filters=filters)
+
+
+def search_beat(
+    beat_text: str,
+    top_k: int = 10,
+    filters: SearchFilters | None = None,
+    rerank: bool = False,
+    confidence_floor: float | None = None,
+) -> list[ChunkResult]:
+    return get_retrieval_api().search_beat(
+        beat_text=beat_text,
+        top_k=top_k,
+        filters=filters,
+        rerank=rerank,
+        confidence_floor=confidence_floor,
+    )
 
 
 def fine_localize(chunk_id: str, query: str) -> tuple[float, float]:

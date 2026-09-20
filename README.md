@@ -133,6 +133,10 @@ Configure your `.env` file according to the options defined in `.env.example` / 
 | `CHUNK_THRESHOLD_SEC` | `45.0` | Clips shorter than this threshold become a single chunk |
 | `SLIDING_WINDOW_SEC` | `10.0` | Window length (seconds) for sub-chunking long scenes |
 | `SLIDING_OVERLAP_RATIO`| `0.5` | Overlap ratio (0.0 to 1.0) between sliding windows |
+| **LLM & Multi-Query Expansion** | | |
+| `GEMINI_API_KEY` / `LLM_API_KEY` | string | API key for Gemini or any OpenAI-compatible provider (Groq, OpenAI, Ollama, etc.) |
+| `LLM_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta/openai` | Base URL for OpenAI-compatible endpoint |
+| `LLM_MODEL` | `gemini-2.5-flash` | Model used for script beat decomposition and LLM Judge reranking |
 
 ---
 
@@ -180,6 +184,12 @@ SKIP_PROCESSING=1 uv run python scripts/ingest_from_urls.py urls.txt
 # Query footage via CLI with entity scoping
 uv run python scripts/search_cli.py "ship sinking in heavy storm" --entity "USS Cyclops"
 
+# Multi-Query search for narrative voiceover beats (auto-expands into concrete visual queries + entity detection)
+uv run python scripts/search_cli.py "As dusk settled, the great warship slipped quietly past the harbor fortresses" --beat
+
+# Multi-Query search with optional LLM Judge reranker and confidence threshold
+uv run python scripts/search_cli.py "A violent midnight storm battered the cargo hull" --beat --rerank --confidence-floor 0.65
+
 # Query general pool via CLI (unrestricted)
 uv run python scripts/search_cli.py "calm ocean sunset"
 
@@ -207,7 +217,7 @@ item = fe.ingest(
 processor = fe.BatchProcessor()
 processor.process_all_pending()
 
-# 3. Perform entity-filtered semantic search
+# 3. Perform entity-filtered semantic search (standard fast path ~20-50ms)
 retrieval = fe.get_retrieval_api()
 results = retrieval.search(
     query="cargo vessel navigating open ocean storm",
@@ -218,10 +228,18 @@ results = retrieval.search(
 for res in results:
     print(f"Match: {res.chunk_id} | Entity: {res.entity_name} | Score: {res.score:.4f} | [{res.start_ts}s - {res.end_ts}s]")
 
-# 4. Search general pool (untagged + tagged footage)
+# 4. Multi-Query expansion & optional LLM Judge for complex voiceover beats
+beat_results = retrieval.search_beat(
+    beat_text="On March 4th, the USS Cyclops vanished into the calm waters of the Atlantic.",
+    top_k=5,
+    rerank=True,             # Optional LLM Judge reorders candidates against original beat prose
+    confidence_floor=0.6,    # Optional score filter
+)
+
+# 5. Search general pool (untagged + tagged footage)
 general_results = retrieval.search(query="calm ocean waves", top_k=5)
 
-# 5. Fine localize the exact cut within a winning chunk
+# 6. Fine localize the exact cut within a winning chunk
 if results:
     start_cut, end_cut = retrieval.fine_localize(
         chunk_id=results[0].chunk_id,
@@ -301,6 +319,7 @@ uv run footage-engine-mcp --transport sse --host 0.0.0.0 --port 8000
 | Type | Name | Description |
 |---|---|---|
 | **Tool** | `search_footage` | Natural language semantic search with filters for canonical entity (`entity_name` or `entity_id`), `media_type` ('video'/'image'), `orientation` ('landscape'/'horizontal' or 'vertical'/'portrait'), `min_duration`, `max_duration`, and `provider`. Returns ranked chunks with cut timestamps, entity associations, aspect ratios, and storage URLs. |
+| **Tool** | `search_script_beat` | Multi-Query expansion search for complex voiceover/script beats. Decomposes abstract narration prose into concrete visual queries, merges candidates by vector similarity, and optionally applies an LLM Judge reranker (`rerank=True`). |
 | **Tool** | `fine_localize_clip` | 1fps frame-level scoring inside a winning chunk to refine exact start/end cut points. |
 | **Tool** | `get_clip_details` | Full metadata, resolution, parent media info, and storage URL for a chunk. |
 | **Tool** | `get_media_item_details` | Full details for a raw media item and all its partitioned chunk segments. |

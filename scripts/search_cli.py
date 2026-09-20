@@ -10,6 +10,18 @@ def main():
     )
     parser.add_argument("query", nargs="*", default=None, help="Search query text")
     parser.add_argument(
+        "--beat", action="store_true",
+        help="Treat query as a narrative voiceover beat (runs Multi-Query expansion + entity detection)"
+    )
+    parser.add_argument(
+        "--rerank", action="store_true",
+        help="Enable optional LLM judge to rerank candidates against the original beat text"
+    )
+    parser.add_argument(
+        "--confidence-floor", type=float, default=None,
+        help="Minimum confidence/similarity threshold (filters out lower scoring clips)"
+    )
+    parser.add_argument(
         "--entity", "--entity-name", dest="entity", default=None,
         help="Scope search to a specific canonical entity (e.g. 'USS Cyclops', 'Aye-aye')"
     )
@@ -25,19 +37,24 @@ def main():
 
     query = " ".join(args.query).strip() if args.query else ""
     if not query:
-        query = input("\n🔍 Enter search query: ").strip()
+        prompt_text = "Enter voiceover script beat" if args.beat else "Enter search query"
+        query = input(f"\n🔍 {prompt_text}: ").strip()
 
     if not query:
         print("Empty query. Exiting.")
         return
 
     print("=" * 80)
-    print("🎬 Footage Engine — Semantic Video Search")
-    print(f"🔎 Query: \"{query}\"")
+    print("🎬 Footage Engine — " + ("Script Beat Search (Multi-Query)" if args.beat else "Semantic Video Search"))
+    print(f"🔎 {'Beat' if args.beat else 'Query'}: \"{query}\"")
     if args.entity:
         print(f"🏷️  Entity Filter: {args.entity}")
     if args.provider:
         print(f"📦 Provider Filter: {args.provider}")
+    if args.beat and args.rerank:
+        print(f"🧠 LLM Judge Reranker: Active")
+    if args.confidence_floor is not None:
+        print(f"🛡️  Confidence Floor: {args.confidence_floor}")
     print("=" * 80)
 
     filters = None
@@ -48,10 +65,20 @@ def main():
         )
 
     retrieval = fe.get_retrieval_api()
-    results = retrieval.search(query=query, top_k=args.top_k, filters=filters)
+
+    if args.beat:
+        results = retrieval.search_beat(
+            beat_text=query,
+            top_k=args.top_k,
+            filters=filters,
+            rerank=args.rerank,
+            confidence_floor=args.confidence_floor,
+        )
+    else:
+        results = retrieval.search(query=query, top_k=args.top_k, filters=filters)
 
     if not results:
-        print("\nNo matching video chunks found. (Make sure you have embedded footage in the DB).")
+        print("\nNo matching video chunks found. (Try adjusting filters or confidence floor).")
         return
 
     for rank, res in enumerate(results, 1):

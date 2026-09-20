@@ -19,7 +19,9 @@ from footage_engine.retrieval.api import (
     get_media_item,
     get_retrieval_api,
     search,
+    search_beat,
 )
+from footage_engine.retrieval.llm import ExpandedBeat, LLMClient, LLMJudge, QueryExpander
 from footage_engine.retrieval.models import ChunkResult, SearchFilters
 
 __all__ = [
@@ -47,11 +49,17 @@ __all__ = [
     "BatchProcessor",
     # Retrieval API
     "search",
+    "search_beat",
     "fine_localize",
     "get_chunk",
     "get_media_item",
     "RetrievalAPI",
     "get_retrieval_api",
+    # LLM & Multi-Query
+    "QueryExpander",
+    "LLMJudge",
+    "LLMClient",
+    "ExpandedBeat",
 ]
 
 __version__ = "0.1.0"

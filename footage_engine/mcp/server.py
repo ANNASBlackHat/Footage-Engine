@@ -164,6 +164,73 @@ def create_mcp_server(
         }
 
     @server.tool(
+        name="search_script_beat",
+        description=(
+            "Search footage for a complex script beat or narration sentence using Multi-Query expansion. "
+            "Decomposes abstract prose/narration into concrete visual search queries, merges candidate chunks, "
+            "and optionally reranks them using an LLM Judge (rerank=True)."
+        ),
+    )
+    def search_script_beat(
+        beat_text: str,
+        top_k: int = 10,
+        media_type: Optional[str] = None,
+        orientation: Optional[str] = None,
+        min_duration: Optional[float] = None,
+        max_duration: Optional[float] = None,
+        provider: Optional[str] = None,
+        entity_name: Optional[str] = None,
+        entity_id: Optional[str] = None,
+        rerank: bool = False,
+        confidence_floor: Optional[float] = None,
+    ) -> dict[str, Any]:
+        filters = None
+        if any(v is not None for v in (media_type, orientation, min_duration, max_duration, provider, entity_name, entity_id)):
+            filters = SearchFilters(
+                media_type=media_type,
+                orientation=orientation,
+                min_duration_sec=min_duration,
+                max_duration_sec=max_duration,
+                provider=provider,
+                entity_name=entity_name,
+                entity_id=entity_id,
+            )
+
+        results = retrieval_api.search_beat(
+            beat_text=beat_text,
+            top_k=top_k,
+            filters=filters,
+            rerank=rerank,
+            confidence_floor=confidence_floor,
+        )
+        return {
+            "beat_text": beat_text,
+            "reranked": rerank,
+            "count": len(results),
+            "results": [
+                {
+                    "chunk_id": r.chunk_id,
+                    "media_item_id": r.media_item_id,
+                    "score": round(float(r.score), 4),
+                    "start_ts": round(float(r.start_ts), 2),
+                    "end_ts": round(float(r.end_ts), 2) if r.end_ts is not None else None,
+                    "duration_sec": round(float(r.duration_sec), 2) if r.duration_sec is not None else None,
+                    "media_type": r.media_type,
+                    "orientation": r.orientation,
+                    "aspect_ratio": r.aspect_ratio,
+                    "provider": r.provider,
+                    "entity_id": r.entity_id,
+                    "entity_name": r.entity_name,
+                    "storage_url": r.storage_url,
+                    "source_url": r.source_url,
+                    "resolution": r.resolution,
+                    "license_type": r.license_type,
+                }
+                for r in results
+            ],
+        }
+
+    @server.tool(
         name="fine_localize_clip",
         description=(
             "Refine video cut points within a chunk by running frame-by-frame (~1fps) "
