@@ -17,7 +17,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
-from sqlalchemy import text
+from sqlalchemy import exists, select
 
 from footage_engine.config import get_settings
 from footage_engine.embeddings import collection_name_for, get_embedder
@@ -45,38 +45,32 @@ def find_items_needing_backfill(
     limit: Optional[int] = None,
     media_ids: Optional[list[str]] = None,
 ) -> list[str]:
-    """Single SQL query: find DONE items with X-CLIP chunks but no Qwen chunks."""
-    query = """
-        SELECT mi.id
-        FROM media_items mi
-        WHERE mi.status = 'done'
-          AND EXISTS (
-            SELECT 1 FROM chunks c
-            WHERE c.media_item_id = mi.id
-              AND c.embedding_model = :xclip_model
-          )
-          AND NOT EXISTS (
-            SELECT 1 FROM chunks c
-            WHERE c.media_item_id = mi.id
-              AND c.embedding_model = :qwen_model
-          )
-    """
-    params: dict = {"xclip_model": xclip_model, "qwen_model": qwen_model}
+    """ORM query: find DONE items with X-CLIP chunks but no Qwen chunks."""
+    has_xclip = exists().where(
+        Chunk.media_item_id == MediaItem.id,
+        Chunk.embedding_model == xclip_model,
+    )
+    has_qwen = exists().where(
+        Chunk.media_item_id == MediaItem.id,
+        Chunk.embedding_model == qwen_model,
+    )
 
+    stmt = (
+        select(MediaItem.id)
+        .where(
+            MediaItem.status == MediaStatus.DONE,
+            has_xclip,
+            ~has_qwen,
+        )
+        .order_by(MediaItem.ingested_at.asc())
+    )
     if media_ids:
-        placeholders = ", ".join(f":mid_{i}" for i in range(len(media_ids)))
-        query += f" AND mi.id IN ({placeholders})"
-        for i, mid in enumerate(media_ids):
-            params[f"mid_{i}"] = mid
-
-    query += " ORDER BY mi.ingested_at ASC"
-
+        stmt = stmt.where(MediaItem.id.in_(media_ids))
     if limit:
-        query += " LIMIT :lim"
-        params["lim"] = limit
+        stmt = stmt.limit(limit)
 
     with get_db_session(database_url) as session:
-        rows = session.execute(text(query), params).scalars().all()
+        rows = session.execute(stmt).scalars().all()
     return list(rows)
 
 
