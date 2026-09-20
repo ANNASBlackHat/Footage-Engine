@@ -25,7 +25,7 @@ Notes:
   - Start with `--dry-run --limit 5` to validate secrets/connectivity fast.
 
 Usage:
-    python scripts/kaggle_backfill.py [--limit N] [--dry-run] [--media-ids A,B] [--skip-deps]
+    python scripts/kaggle_backfill.py [--limit N] [--dry-run] [--media-ids A,B] [--workers N] [--skip-deps]
 """
 
 import argparse
@@ -82,6 +82,7 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--media-ids", default=None)
+    ap.add_argument("--workers", type=int, default=2, help="Parallel video workers (default: 2 on Kaggle GPU).")
     ap.add_argument("--skip-deps", action="store_true", help="Skip dependency check/install.")
     args = ap.parse_args()
 
@@ -114,6 +115,7 @@ def main() -> int:
         argv += ["--limit", str(args.limit)]
     if args.media_ids:
         argv += ["--media-ids", args.media_ids]
+    argv += ["--workers", str(args.workers)]
     sys.argv = argv
     return backfill_main()
 
