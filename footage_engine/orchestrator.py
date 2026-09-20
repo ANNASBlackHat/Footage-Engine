@@ -10,6 +10,7 @@ import requests
 from sqlalchemy import or_, select
 
 from footage_engine.config import Settings, get_settings
+from footage_engine.entities import EntityResolver
 from footage_engine.models.db import get_db_session, init_db
 from footage_engine.models.media import MediaItem, MediaStatus, MediaType
 from footage_engine.sources.base import Candidate, SourceAdapter
@@ -58,6 +59,7 @@ class Orchestrator:
         self.storage = storage or get_storage_backend(self.settings)
         self.database_url = database_url or self.settings.DATABASE_URL
         init_db(self.database_url)
+        self.entity_resolver = EntityResolver(database_url=self.database_url)
 
         # Register provider adapters
         self.adapters: dict[str, SourceAdapter] = {
@@ -104,12 +106,24 @@ class Orchestrator:
         media_type: Optional[str] = None,
         duration_sec: Optional[float] = None,
         resolution: Optional[str] = None,
+        entity_name: Optional[str] = None,
+        entity_id: Optional[str] = None,
+        entity_type: str = "other",
     ) -> MediaItem:
         """Idempotent ingestion. Returns existing MediaItem immediately if already ingested."""
         normalized_url = self._normalize_url(source_url)
         if not media_type or media_type == "auto":
             inferred = infer_media_type_from_url(normalized_url)
             media_type = inferred or "video"
+
+        # Resolve entity if entity_name provided
+        eff_entity_id = entity_id
+        if entity_name and not eff_entity_id:
+            resolved_entity = self.entity_resolver.resolve_or_create(
+                name=entity_name,
+                entity_type=entity_type,
+            )
+            eff_entity_id = resolved_entity.id
 
         if is_youtube_url(normalized_url):
             if provider in ("manual", "direct", "unknown"):
@@ -133,6 +147,13 @@ class Orchestrator:
         existing = self.find_existing(normalized_url, provider, source_id)
         if existing:
             if existing.status != MediaStatus.FAILED:
+                if eff_entity_id and not existing.entity_id:
+                    with get_db_session(self.database_url) as session:
+                        db_item = session.get(MediaItem, existing.id)
+                        if db_item:
+                            db_item.entity_id = eff_entity_id
+                            session.flush()
+                            existing.entity_id = eff_entity_id
                 logger.info(f"Duplicate found for {provider}:{source_id or normalized_url}. Returning existing MediaItem {existing.id}.")
                 return existing
             else:
@@ -168,6 +189,7 @@ class Orchestrator:
                 logger.error(f"Failed to download raw asset from {normalized_url}: {e}")
                 with get_db_session(self.database_url) as session:
                     failed_item = MediaItem(
+                        entity_id=eff_entity_id,
                         provider=provider,
                         source_id=source_id,
                         source_url=normalized_url,
@@ -202,6 +224,7 @@ class Orchestrator:
         # 4. Insert media_item row (status=pending)
         with get_db_session(self.database_url) as session:
             media_item = MediaItem(
+                entity_id=eff_entity_id,
                 provider=provider,
                 source_id=source_id,
                 source_url=normalized_url,
@@ -220,7 +243,12 @@ class Orchestrator:
             logger.info(f"Ingested new MediaItem {media_item.id} (status: pending).")
             return media_item
 
-    def ingest_candidate(self, candidate: Candidate) -> MediaItem:
+    def ingest_candidate(
+        self,
+        candidate: Candidate,
+        entity_name: Optional[str] = None,
+        entity_id: Optional[str] = None,
+    ) -> MediaItem:
         """Ingests a standard Candidate object."""
         return self.ingest(
             source_url=candidate.source_url,
@@ -231,6 +259,8 @@ class Orchestrator:
             media_type=candidate.media_type,
             duration_sec=candidate.duration_sec,
             resolution=candidate.resolution,
+            entity_name=entity_name,
+            entity_id=entity_id,
         )
 
     def search_and_ingest(
@@ -240,6 +270,8 @@ class Orchestrator:
         max_results: int = 10,
         media_type: str = "video",
         orientation: Optional[str] = None,
+        entity_name: Optional[str] = None,
+        entity_id: Optional[str] = None,
     ) -> list[MediaItem]:
         """Search a provider and ingest newly discovered media candidates."""
         adapter = self.adapters.get(provider)
@@ -266,7 +298,7 @@ class Orchestrator:
 
         results: list[MediaItem] = []
         for cand in candidates:
-            item = self.ingest_candidate(cand)
+            item = self.ingest_candidate(cand, entity_name=entity_name, entity_id=entity_id)
             results.append(item)
         return results
 
@@ -274,12 +306,14 @@ class Orchestrator:
         self,
         urls: list[str],
         provider: str = "manual",
+        entity_name: Optional[str] = None,
+        entity_id: Optional[str] = None,
     ) -> list[MediaItem]:
         """Ingest a list of direct URLs."""
         results: list[MediaItem] = []
         for url in urls:
             cand = DirectURLAdapter.url_to_candidate(url, provider=provider)
-            item = self.ingest_candidate(cand)
+            item = self.ingest_candidate(cand, entity_name=entity_name, entity_id=entity_id)
             results.append(item)
         return results
 
@@ -287,6 +321,8 @@ class Orchestrator:
         self,
         provider: URLProvider,
         provider_name: str = "external_db",
+        entity_name: Optional[str] = None,
+        entity_id: Optional[str] = None,
     ) -> list[MediaItem]:
         """Ingest from an external DB / URLProvider stream."""
         results: list[MediaItem] = []
@@ -297,7 +333,7 @@ class Orchestrator:
                 source_id=metadata.get("id"),
                 metadata=metadata,
             )
-            item = self.ingest_candidate(cand)
+            item = self.ingest_candidate(cand, entity_name=entity_name, entity_id=entity_id)
             results.append(item)
         return results
 
@@ -322,6 +358,9 @@ def ingest(
     media_type: str = "video",
     duration_sec: float | None = None,
     resolution: str | None = None,
+    entity_name: str | None = None,
+    entity_id: str | None = None,
+    entity_type: str = "other",
 ) -> MediaItem:
     return get_orchestrator().ingest(
         source_url=source_url,
@@ -332,6 +371,9 @@ def ingest(
         media_type=media_type,
         duration_sec=duration_sec,
         resolution=resolution,
+        entity_name=entity_name,
+        entity_id=entity_id,
+        entity_type=entity_type,
     )
 
 
@@ -341,6 +383,8 @@ def search_and_ingest(
     max_results: int = 20,
     media_type: str = "video",
     orientation: str | None = None,
+    entity_name: str | None = None,
+    entity_id: str | None = None,
 ) -> list[MediaItem]:
     return get_orchestrator().search_and_ingest(
         keyword=keyword,
@@ -348,21 +392,34 @@ def search_and_ingest(
         max_results=max_results,
         media_type=media_type,
         orientation=orientation,
+        entity_name=entity_name,
+        entity_id=entity_id,
     )
 
 
 def ingest_url_list(
     urls: list[str],
     provider: str = "manual",
+    entity_name: str | None = None,
+    entity_id: str | None = None,
 ) -> list[MediaItem]:
-    return get_orchestrator().ingest_url_list(urls=urls, provider=provider)
+    return get_orchestrator().ingest_url_list(
+        urls=urls,
+        provider=provider,
+        entity_name=entity_name,
+        entity_id=entity_id,
+    )
 
 
 def ingest_from_provider(
     provider: URLProvider,
     provider_name: str = "external_db",
+    entity_name: str | None = None,
+    entity_id: str | None = None,
 ) -> list[MediaItem]:
     return get_orchestrator().ingest_from_provider(
         provider=provider,
         provider_name=provider_name,
+        entity_name=entity_name,
+        entity_id=entity_id,
     )

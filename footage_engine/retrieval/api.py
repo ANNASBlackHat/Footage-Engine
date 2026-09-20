@@ -10,6 +10,7 @@ from sqlalchemy import select
 from footage_engine.config import Settings, get_settings
 from footage_engine.embeddings import backend_for, collection_name_for, get_embedder
 from footage_engine.embeddings.base import EmbeddingBackend
+from footage_engine.entities import EntityResolver
 from footage_engine.models.db import get_db_session
 from footage_engine.models.media import Chunk, MediaItem, MediaType, utc_now
 from footage_engine.retrieval.models import ChunkResult, SearchFilters
@@ -44,6 +45,7 @@ class RetrievalAPI:
         self.backend = backend_for(self.settings, self.embedder)
         self.vector_store = vector_store or get_vector_store(self.settings, backend=self.backend)
         self.database_url = database_url or self.settings.DATABASE_URL
+        self.entity_resolver = EntityResolver(database_url=self.database_url)
         if collection_name is not None:
             self.collection_name = collection_name
         else:
@@ -56,6 +58,14 @@ class RetrievalAPI:
         filters: Optional[SearchFilters] = None,
     ) -> list[ChunkResult]:
         """Performs semantic vector search and hydrates results with full metadata and storage URLs."""
+        # Resolve entity_name if specified
+        if filters and filters.entity_name and not filters.entity_id:
+            resolved_entity = self.entity_resolver.resolve(filters.entity_name)
+            if not resolved_entity:
+                logger.info(f"Entity '{filters.entity_name}' not found. Returning 0 results.")
+                return []
+            filters.entity_id = resolved_entity.id
+
         query_vector = self.embedder.embed_text(query)
         filter_expr = filters.to_milvus_expr() if filters else None
 
@@ -112,6 +122,8 @@ class RetrievalAPI:
                     tags=chunk.tags or [],
                     usage_count=chunk.usage_count,
                     last_used_at=chunk.last_used_at,
+                    entity_id=media_item.entity_id,
+                    entity_name=media_item.entity.name if media_item.entity else None,
                     item_metadata=media_item.item_metadata or {},
                 )
 
@@ -163,6 +175,8 @@ class RetrievalAPI:
                 tags=chunk.tags or [],
                 usage_count=chunk.usage_count,
                 last_used_at=chunk.last_used_at,
+                entity_id=media_item.entity_id,
+                entity_name=media_item.entity.name if media_item.entity else None,
                 item_metadata=media_item.item_metadata or {},
             )
 

@@ -46,10 +46,29 @@ class MediaType(str, enum.Enum):
     IMAGE = "image"
 
 
+class Entity(Base):
+    __tablename__ = "entities"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid_str)
+    name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    aliases: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    entity_type: Mapped[str] = mapped_column(String(50), default="other", nullable=False)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+    # Relationships
+    media_items: Mapped[List["MediaItem"]] = relationship("MediaItem", back_populates="entity")
+
+    def __repr__(self) -> str:
+        return f"<Entity id={self.id} name='{self.name}' type='{self.entity_type}'>"
+
+
 class MediaItem(Base):
     __tablename__ = "media_items"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid_str)
+    entity_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("entities.id", ondelete="SET NULL"), nullable=True)
     provider: Mapped[str] = mapped_column(String(50), nullable=False)
     source_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     source_url: Mapped[str] = mapped_column(Text, nullable=False)
@@ -65,6 +84,7 @@ class MediaItem(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
     # Relationships
+    entity: Mapped[Optional["Entity"]] = relationship("Entity", back_populates="media_items")
     chunks: Mapped[List["Chunk"]] = relationship("Chunk", back_populates="media_item", cascade="all, delete-orphan")
 
     __table_args__ = (
@@ -72,6 +92,7 @@ class MediaItem(Base):
         UniqueConstraint("source_url", name="uq_media_source_url"),
         Index("ix_media_items_status", "status"),
         Index("ix_media_items_provider", "provider"),
+        Index("ix_media_items_entity_id", "entity_id"),
     )
 
     @property

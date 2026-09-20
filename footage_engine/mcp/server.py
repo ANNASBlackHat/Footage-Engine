@@ -106,10 +106,11 @@ def create_mcp_server(
         name="search_footage",
         description=(
             "Semantically search for video or image footage using natural language queries. "
-            "Supports filtering by media type ('video', 'image'), orientation ('landscape'/'horizontal' or 'vertical'/'portrait'), "
+            "Supports filtering by canonical entity (entity_name or entity_id), media type ('video', 'image'), "
+            "orientation ('landscape'/'horizontal' or 'vertical'/'portrait'), "
             "duration bounds (min_duration, max_duration in seconds), and provider ('pexels', 'pixabay', 'coverr', 'youtube', 'manual'). "
             "Returns ranked video chunks with scores, exact start/end timestamps, orientation, aspect ratio, "
-            "and media streaming/storage URLs."
+            "entity associations, and media streaming/storage URLs."
         ),
     )
     def search_footage(
@@ -120,15 +121,19 @@ def create_mcp_server(
         min_duration: Optional[float] = None,
         max_duration: Optional[float] = None,
         provider: Optional[str] = None,
+        entity_name: Optional[str] = None,
+        entity_id: Optional[str] = None,
     ) -> dict[str, Any]:
         filters = None
-        if any(v is not None for v in (media_type, orientation, min_duration, max_duration, provider)):
+        if any(v is not None for v in (media_type, orientation, min_duration, max_duration, provider, entity_name, entity_id)):
             filters = SearchFilters(
                 media_type=media_type,
                 orientation=orientation,
                 min_duration_sec=min_duration,
                 max_duration_sec=max_duration,
                 provider=provider,
+                entity_name=entity_name,
+                entity_id=entity_id,
             )
 
         results = retrieval_api.search(query=query, top_k=top_k, filters=filters)
@@ -147,6 +152,8 @@ def create_mcp_server(
                     "orientation": r.orientation,
                     "aspect_ratio": r.aspect_ratio,
                     "provider": r.provider,
+                    "entity_id": r.entity_id,
+                    "entity_name": r.entity_name,
                     "storage_url": r.storage_url,
                     "source_url": r.source_url,
                     "resolution": r.resolution,
@@ -247,6 +254,7 @@ def create_mcp_server(
         description=(
             "Ingest a media item by direct file URL or YouTube URL. "
             "Applies pre-spend deduplication before network I/O. "
+            "Supports optional entity association (entity_name or entity_id) for entity-aware footage tagging. "
             "Supports optional media_type ('image', 'video', or None for automatic extension detection like .webp/.png/.jpg/.mp4). "
             "If auto_process=True, chunks and indexes the clip immediately."
         ),
@@ -256,6 +264,8 @@ def create_mcp_server(
         provider: str = "manual",
         media_type: Optional[str] = None,
         source_id: Optional[str] = None,
+        entity_name: Optional[str] = None,
+        entity_id: Optional[str] = None,
         auto_process: bool = True,
     ) -> dict[str, Any]:
         existing = orchestrator.find_existing(url, provider=provider, source_id=source_id)
@@ -264,6 +274,8 @@ def create_mcp_server(
             provider=provider,
             source_id=source_id,
             media_type=media_type,
+            entity_name=entity_name,
+            entity_id=entity_id,
         )
         was_duplicate = existing is not None
         processed = False
@@ -276,6 +288,7 @@ def create_mcp_server(
             "provider": item.provider,
             "source_url": item.source_url,
             "media_type": item.media_type.value,
+            "entity_id": item.entity_id,
             "is_duplicate": was_duplicate,
             "status": item.status.value,
             "auto_processed": processed,
@@ -363,6 +376,50 @@ def create_mcp_server(
             "vector_store": settings.VECTOR_STORE,
             "embedding_model": embedder.model_name,
             "embedding_dimension": embedder.dimension,
+        }
+
+    @server.tool(
+        name="list_entities",
+        description="List registered canonical entities with their IDs, aliases, and entity types.",
+    )
+    def list_entities(entity_type: Optional[str] = None) -> dict[str, Any]:
+        entities = orchestrator.entity_resolver.list_entities(entity_type=entity_type)
+        return {
+            "count": len(entities),
+            "entities": [
+                {
+                    "id": e.id,
+                    "name": e.name,
+                    "entity_type": e.entity_type,
+                    "aliases": e.aliases or [],
+                    "notes": e.notes,
+                }
+                for e in entities
+            ],
+        }
+
+    @server.tool(
+        name="resolve_or_create_entity",
+        description="Resolve an existing entity by name or alias, or register a new canonical entity.",
+    )
+    def resolve_or_create_entity(
+        name: str,
+        entity_type: str = "other",
+        aliases: Optional[list[str]] = None,
+        notes: Optional[str] = None,
+    ) -> dict[str, Any]:
+        ent = orchestrator.entity_resolver.resolve_or_create(
+            name=name,
+            entity_type=entity_type,
+            aliases=aliases,
+            notes=notes,
+        )
+        return {
+            "id": ent.id,
+            "name": ent.name,
+            "entity_type": ent.entity_type,
+            "aliases": ent.aliases or [],
+            "notes": ent.notes,
         }
 
     # -------------------------------------------------------------------------

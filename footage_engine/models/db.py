@@ -33,9 +33,27 @@ def get_engine(database_url: str | None = None):
 
 
 def init_db(database_url: str | None = None) -> None:
-    """Initialize all database tables."""
+    """Initialize all database tables and migrate missing columns."""
+    from sqlalchemy import inspect, text
+
     engine = get_engine(database_url)
     Base.metadata.create_all(bind=engine)
+
+    # Lightweight migration for existing databases: ensure entity_id exists on media_items
+    try:
+        inspector = inspect(engine)
+        if "media_items" in inspector.get_table_names():
+            columns = [c["name"] for c in inspector.get_columns("media_items")]
+            if "entity_id" not in columns:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE media_items ADD COLUMN entity_id VARCHAR(36)"))
+                    try:
+                        conn.execute(text("CREATE INDEX ix_media_items_entity_id ON media_items (entity_id)"))
+                    except Exception:
+                        pass
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Could not inspect or auto-migrate media_items schema: {e}")
 
 
 def get_session_factory(database_url: str | None = None) -> sessionmaker[Session]:

@@ -134,6 +134,14 @@ def main():
         help="Provider label for ingested assets (default: manual)"
     )
     parser.add_argument(
+        "--entity", "--entity-name", dest="entity", default=None,
+        help="Canonical entity name to associate with all ingested URLs (e.g. 'USS Cyclops', 'Aye-aye')"
+    )
+    parser.add_argument(
+        "--entity-type", default="other",
+        help="Entity type if creating a new entity ('ship', 'animal', 'person', 'location', 'event', 'other')"
+    )
+    parser.add_argument(
         "--dry-run", action="store_true",
         help="Extract and display URLs without actually ingesting"
     )
@@ -163,6 +171,8 @@ def main():
     print(f"  ├─ Videos   : {videos}", flush=True)
     print(f"  └─ Images   : {images}", flush=True)
     print(f"• Provider    : {args.provider}", flush=True)
+    if args.entity:
+        print(f"• Entity      : {args.entity} (type: {args.entity_type})", flush=True)
     print(f"• Dry run     : {args.dry_run}", flush=True)
     print("=" * 80, flush=True)
 
@@ -183,7 +193,11 @@ def main():
     init_db(cfg.DATABASE_URL)
 
     orchestrator = fe.Orchestrator()
-    results = orchestrator.ingest_url_list(urls=urls, provider=args.provider)
+    results = orchestrator.ingest_url_list(
+        urls=urls,
+        provider=args.provider,
+        entity_name=args.entity,
+    )
 
     success = sum(1 for r in results if r.status.value != "failed")
     failed = len(results) - success

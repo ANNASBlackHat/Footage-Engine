@@ -160,6 +160,7 @@ class BatchProcessor:
                         duration_sec=chunk.end_ts - chunk.start_ts if chunk.end_ts else None,
                         embedding_model=chunk.embedding_model,
                         embedding_version=chunk.embedding_version,
+                        entity_id=item.entity_id,
                     )
                     vector_records.append(vec_record)
 

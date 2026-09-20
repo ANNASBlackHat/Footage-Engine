@@ -66,9 +66,12 @@ def parse_args():
         help="Extract cookies from browser (e.g. 'chrome', 'firefox', 'brave', 'safari')",
     )
     parser.add_argument(
-        "--skip-index",
-        action="store_true",
-        help="Only slice/export clips without generating embeddings or writing to vector store",
+        "--entity", "--entity-name", dest="entity", default=None,
+        help="Canonical entity name to associate with this footage (e.g. 'USS Cyclops', 'Aye-aye')",
+    )
+    parser.add_argument(
+        "--entity-type", default="other",
+        help="Entity type if creating a new entity ('ship', 'animal', 'person', 'location', 'event', 'other')",
     )
     return parser.parse_args()
 
@@ -102,6 +105,8 @@ def main():
     print(f"• Threshold    : {args.threshold}", flush=True)
     print(f"• Workers      : {args.workers} concurrent ffmpeg threads", flush=True)
     print(f"• Fast Seek    : Active (-ss before -i)", flush=True)
+    if args.entity:
+        print(f"• Entity       : {args.entity} (type: {args.entity_type})", flush=True)
     if args.cookies or cfg.YOUTUBE_COOKIES:
         print(f"• Cookies      : Active ({args.cookies or cfg.YOUTUBE_COOKIES})", flush=True)
     if args.cookies_from_browser or cfg.YOUTUBE_COOKIES_FROM_BROWSER:
@@ -117,7 +122,11 @@ def main():
 
     # Step 1: Ingest & fetch metadata
     print("\n[1/4] Fetching video metadata & registering in database...", flush=True)
-    item = fe.ingest(url)
+    item = fe.ingest(
+        source_url=url,
+        entity_name=args.entity,
+        entity_type=args.entity_type,
+    )
 
     dur_str = f"{item.duration_sec:.1f}s ({item.duration_sec / 60:.1f} min)" if item.duration_sec else "unknown"
     print(f"  ✓ MediaItem ID : {item.id}", flush=True)

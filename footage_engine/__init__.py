@@ -1,7 +1,8 @@
 """Footage Retrieval Engine — Standalone library for footage ingestion, chunking, embedding, and semantic search."""
 
 from footage_engine.config import Settings, get_settings
-from footage_engine.models.media import Chunk, MediaItem, MediaStatus, MediaType
+from footage_engine.entities import EntityResolver
+from footage_engine.models.media import Chunk, Entity, MediaItem, MediaStatus, MediaType
 from footage_engine.orchestrator import (
     Orchestrator,
     get_orchestrator,
@@ -26,12 +27,15 @@ __all__ = [
     "Settings",
     "get_settings",
     # Data Models
+    "Entity",
     "MediaItem",
     "Chunk",
     "MediaStatus",
     "MediaType",
     "ChunkResult",
     "SearchFilters",
+    # Entity Resolver
+    "EntityResolver",
     # Ingestion API
     "ingest",
     "search_and_ingest",

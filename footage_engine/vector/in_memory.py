@@ -43,6 +43,10 @@ class InMemoryVectorStore:
         for vid, record in col.items():
             # Basic filtering support for common tags/fields
             if filter_expr:
+                if 'entity_id == "' in filter_expr:
+                    wanted_entity = filter_expr.split('entity_id == "')[1].split('"')[0]
+                    if record.entity_id != wanted_entity:
+                        continue
                 if 'provider == "' in filter_expr:
                     wanted_prov = filter_expr.split('provider == "')[1].split('"')[0]
                     if record.provider != wanted_prov:
@@ -70,6 +74,7 @@ class InMemoryVectorStore:
                     provider=record.provider,
                     media_type=record.media_type,
                     duration_sec=record.duration_sec,
+                    entity_id=record.entity_id,
                     metadata=record.metadata,
                 )
             )

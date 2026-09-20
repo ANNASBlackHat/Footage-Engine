@@ -32,20 +32,44 @@ def load_keywords(file_path: str = "keywords.txt") -> list[str]:
     return unique_keywords
 
 
+import argparse
+
+
 def main():
+    parser = argparse.ArgumentParser(
+        description="Batch ingest footage from Pexels, Pixabay & Coverr using keywords."
+    )
+    parser.add_argument(
+        "--file", default="keywords.txt",
+        help="Path to text file containing keywords (default: keywords.txt)"
+    )
+    parser.add_argument(
+        "--entity", "--entity-name", dest="entity", default=None,
+        help="Canonical entity name to associate with all ingested keyword assets (e.g. 'USS Cyclops', 'Aye-aye')"
+    )
+    parser.add_argument(
+        "--entity-type", default="other",
+        help="Entity type if creating a new entity ('ship', 'animal', 'person', 'location', 'event', 'other')"
+    )
+    parser.add_argument(
+        "--max", type=int, default=int(os.environ.get("MAX_RESULTS_PER_KEYWORD", "2")),
+        help="Max items per keyword search (default: 2)"
+    )
+    args = parser.parse_args()
+
     cfg = get_settings()
     init_db(cfg.DATABASE_URL)
     vec_store = get_vector_store(cfg)
 
-    # 1. Load keywords from keywords.txt
-    keywords = load_keywords("keywords.txt")
+    # 1. Load keywords
+    keywords = load_keywords(args.file)
     if not keywords:
         print("No keywords found to process.", flush=True)
         return
 
     # Providers to query (excluding YouTube)
     providers = ["pexels", "pixabay", "coverr"]
-    max_per_kw = int(os.environ.get("MAX_RESULTS_PER_KEYWORD", "2"))
+    max_per_kw = args.max
     media_type = os.environ.get("MEDIA_TYPE", cfg.DEFAULT_MEDIA_TYPE).lower()
     orientation = (os.environ.get("ORIENTATION") or os.environ.get("ASSET_ORIENTATION") or cfg.DEFAULT_ORIENTATION).lower()
 
@@ -53,6 +77,8 @@ def main():
     print("🎬 Footage Engine — Multi-Keyword Ingestion (Pexels, Pixabay & Coverr)", flush=True)
     print("=" * 80, flush=True)
     print(f"• Total unique keywords: {len(keywords)}", flush=True)
+    if args.entity:
+        print(f"• Entity               : {args.entity} (type: {args.entity_type})", flush=True)
     print(f"• Providers to query   : {', '.join(providers).upper()}", flush=True)
     print(f"• Max items per search : {max_per_kw}", flush=True)
     print(f"• Media type           : {media_type.upper()}", flush=True)
@@ -75,6 +101,8 @@ def main():
                     max_results=max_per_kw,
                     media_type=media_type,
                     orientation=orientation,
+                    entity_name=args.entity,
+                    entity_type=args.entity_type,
                 )
                 if items:
                     print(f"   ✓ {prov.upper():<8}: Ingested/found {len(items)} asset(s)", flush=True)

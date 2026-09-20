@@ -16,6 +16,8 @@ class SearchFilters:
     max_duration_sec: Optional[float] = None
     tags: Optional[list[str]] = None
     orientation: Optional[str] = None  # "horizontal", "landscape", "vertical", "portrait", "square"
+    entity_id: Optional[str] = None
+    entity_name: Optional[str] = None
 
     def __post_init__(self):
         if self.orientation:
@@ -30,6 +32,8 @@ class SearchFilters:
     def to_milvus_expr(self) -> str:
         """Converts filters into a Milvus/Zilliz scalar boolean expression."""
         clauses = []
+        if self.entity_id:
+            clauses.append(f'entity_id == "{self.entity_id}"')
         if self.media_type:
             clauses.append(f'media_type == "{self.media_type}"')
         if self.provider:
@@ -62,6 +66,8 @@ class ChunkResult:
     tags: list[str] = field(default_factory=list)
     usage_count: int = 0
     last_used_at: Optional[datetime] = None
+    entity_id: Optional[str] = None
+    entity_name: Optional[str] = None
     item_metadata: dict[str, Any] = field(default_factory=dict)
 
     @property

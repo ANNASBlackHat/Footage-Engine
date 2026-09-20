@@ -64,6 +64,7 @@ class ZillizVectorStore:
                     "duration_sec": float(r.duration_sec or 0.0),
                     "embedding_model": r.embedding_model,
                     "embedding_version": r.embedding_version,
+                    "entity_id": r.entity_id or "",
                 }
             )
             ids.append(r.id)
@@ -84,7 +85,7 @@ class ZillizVectorStore:
             data=[query_vector],
             limit=top_k,
             filter=filter_expr or "",
-            output_fields=["chunk_id", "media_item_id", "provider", "media_type", "duration_sec"],
+            output_fields=["chunk_id", "media_item_id", "provider", "media_type", "duration_sec", "entity_id"],
             search_params=search_params,
         )
 
@@ -101,6 +102,7 @@ class ZillizVectorStore:
                         provider=entity.get("provider", ""),
                         media_type=entity.get("media_type", "video"),
                         duration_sec=float(entity.get("duration_sec", 0.0)),
+                        entity_id=entity.get("entity_id") or None,
                     )
                 )
 

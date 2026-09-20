@@ -1,6 +1,6 @@
 # Footage Retrieval Engine
 
-A modular, standalone Python engine for ingesting video and image footage across multiple stock providers, chunking clips via adaptive scene detection, computing multimodal embeddings with X-CLIP, and executing semantic search with frame-level fine localization.
+A modular, standalone Python engine for ingesting video and image footage across multiple stock providers, associating footage with canonical entities (ships, animals, people, locations), chunking clips via adaptive scene detection, computing multimodal embeddings with X-CLIP/Qwen-VL, and executing entity-filtered semantic search with frame-level fine localization.
 
 ---
 
@@ -150,14 +150,23 @@ uv run python examples/demo.py --mock
 uv run python examples/demo.py
 ```
 
-### 2. Multi-Provider Ingestion & Narrative Search Scripts
+### 2. Multi-Provider Ingestion & Entity Scripts
 
 ```bash
+# Ingest media from a file of URLs tagged with a canonical entity
+uv run python scripts/ingest_from_urls.py urls.txt --entity "USS Cyclops" --entity-type ship
+
+# Ingest media from URLs into general B-roll pool (unassigned)
+uv run python scripts/ingest_from_urls.py urls.txt
+
+# Ingest a YouTube documentary and associate with an entity
+uv run python scripts/ingest_youtube_video.py "https://www.youtube.com/watch?v=..." --entity "Aye-aye" --entity-type animal
+
+# Ingest keywords from a text file tagged with an entity
+uv run python scripts/ingest_from_keywords.py --file keywords.txt --entity "Bermuda Triangle" --entity-type location
+
 # Ingest curated narrative assets from Pexels, Pixabay, and Coverr
 uv run python scripts/ingest_story_footage.py
-
-# Ingest media from a file containing URLs (plain text, markdown, HTML, etc.)
-uv run python scripts/ingest_from_urls.py urls.txt
 
 # Preview extracted URLs without ingesting
 uv run python scripts/ingest_from_urls.py urls.txt --dry-run
@@ -168,6 +177,12 @@ uv run python scripts/ingest_from_urls.py urls.txt --max 20 --provider wikimedia
 # Skip embedding processing (ingest only)
 SKIP_PROCESSING=1 uv run python scripts/ingest_from_urls.py urls.txt
 
+# Query footage via CLI with entity scoping
+uv run python scripts/search_cli.py "ship sinking in heavy storm" --entity "USS Cyclops"
+
+# Query general pool via CLI (unrestricted)
+uv run python scripts/search_cli.py "calm ocean sunset"
+
 # Query narrative story segments with ranked retrieval and fine localization
 uv run python scripts/demo_narrative_search.py
 ```
@@ -176,27 +191,37 @@ uv run python scripts/demo_narrative_search.py
 
 ```python
 import footage_engine as fe
+from footage_engine.retrieval.models import SearchFilters
 
-# 1. Ingest media from stock provider or URL (with automatic deduplication)
+# 1. Ingest media tagged with a canonical entity (auto-deduplicated)
 item = fe.ingest(
-    source_url="https://example.com/video.mp4",
+    source_url="https://example.com/cyclops_storm.mp4",
     provider="pexels",
     source_id="123456",
     media_type="video",
+    entity_name="USS Cyclops",
+    entity_type="ship",
 )
 
 # 2. Process pending items (scene detection, chunking, X-CLIP embedding, vector indexing)
 processor = fe.BatchProcessor()
 processor.process_all_pending()
 
-# 3. Perform semantic search across indexed chunks
+# 3. Perform entity-filtered semantic search
 retrieval = fe.get_retrieval_api()
-results = retrieval.search(query="cargo vessel navigating open ocean storm", top_k=5)
+results = retrieval.search(
+    query="cargo vessel navigating open ocean storm",
+    top_k=5,
+    filters=SearchFilters(entity_name="USS Cyclops"),
+)
 
 for res in results:
-    print(f"Match: {res.chunk_id} | Score: {res.score:.4f} | [{res.start_ts}s - {res.end_ts}s]")
+    print(f"Match: {res.chunk_id} | Entity: {res.entity_name} | Score: {res.score:.4f} | [{res.start_ts}s - {res.end_ts}s]")
 
-# 4. Fine localize the exact cut within a winning chunk
+# 4. Search general pool (untagged + tagged footage)
+general_results = retrieval.search(query="calm ocean waves", top_k=5)
+
+# 5. Fine localize the exact cut within a winning chunk
 if results:
     start_cut, end_cut = retrieval.fine_localize(
         chunk_id=results[0].chunk_id,
@@ -275,12 +300,14 @@ uv run footage-engine-mcp --transport sse --host 0.0.0.0 --port 8000
 
 | Type | Name | Description |
 |---|---|---|
-| **Tool** | `search_footage` | Natural language semantic search with filters for `media_type` ('video'/'image'), `orientation` ('landscape'/'horizontal' or 'vertical'/'portrait'), `min_duration`, `max_duration`, and `provider`. Returns ranked chunks with cut timestamps, aspect ratios, and storage URLs. |
+| **Tool** | `search_footage` | Natural language semantic search with filters for canonical entity (`entity_name` or `entity_id`), `media_type` ('video'/'image'), `orientation` ('landscape'/'horizontal' or 'vertical'/'portrait'), `min_duration`, `max_duration`, and `provider`. Returns ranked chunks with cut timestamps, entity associations, aspect ratios, and storage URLs. |
 | **Tool** | `fine_localize_clip` | 1fps frame-level scoring inside a winning chunk to refine exact start/end cut points. |
 | **Tool** | `get_clip_details` | Full metadata, resolution, parent media info, and storage URL for a chunk. |
 | **Tool** | `get_media_item_details` | Full details for a raw media item and all its partitioned chunk segments. |
-| **Tool** | `ingest_url` | Direct URL / YouTube ingestion with pre-spend deduplication. |
+| **Tool** | `ingest_url` | Direct URL / YouTube ingestion with pre-spend deduplication and optional canonical `entity_name` / `entity_id`. |
 | **Tool** | `ingest_keywords` | Search stock providers (Pexels, Pixabay, Coverr) and ingest candidates. |
+| **Tool** | `list_entities` | List registered canonical entities with their IDs, aliases, and entity types. |
+| **Tool** | `resolve_or_create_entity` | Resolve an entity by name/alias or register a new canonical entity. |
 | **Tool** | `process_pending_queue` | Batch process pending items through chunking and vector indexing. |
 | **Tool** | `get_library_stats` | Global stats on indexed assets, providers, and vector store backend. |
 | **Resource** | `footage://chunks/{chunk_id}` | JSON payload of chunk metadata and stream URL. |

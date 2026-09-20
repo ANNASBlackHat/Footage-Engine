@@ -1,14 +1,30 @@
-"""Interactive CLI search tool for querying embedded video footage."""
-
+import argparse
 import sys
 import footage_engine as fe
 from footage_engine.retrieval.models import SearchFilters
 
 
 def main():
-    if len(sys.argv) > 1:
-        query = " ".join(sys.argv[1:])
-    else:
+    parser = argparse.ArgumentParser(
+        description="Interactive CLI search tool for querying embedded video footage."
+    )
+    parser.add_argument("query", nargs="*", default=None, help="Search query text")
+    parser.add_argument(
+        "--entity", "--entity-name", dest="entity", default=None,
+        help="Scope search to a specific canonical entity (e.g. 'USS Cyclops', 'Aye-aye')"
+    )
+    parser.add_argument(
+        "--provider", default=None,
+        help="Filter by provider ('pexels', 'pixabay', 'coverr', 'youtube', 'manual')"
+    )
+    parser.add_argument(
+        "--top-k", type=int, default=5,
+        help="Number of results to return (default: 5)"
+    )
+    args = parser.parse_args()
+
+    query = " ".join(args.query).strip() if args.query else ""
+    if not query:
         query = input("\n🔍 Enter search query: ").strip()
 
     if not query:
@@ -16,12 +32,23 @@ def main():
         return
 
     print("=" * 80)
-    print(f"🎬 Footage Engine — Semantic Video Search")
+    print("🎬 Footage Engine — Semantic Video Search")
     print(f"🔎 Query: \"{query}\"")
+    if args.entity:
+        print(f"🏷️  Entity Filter: {args.entity}")
+    if args.provider:
+        print(f"📦 Provider Filter: {args.provider}")
     print("=" * 80)
 
+    filters = None
+    if args.entity or args.provider:
+        filters = SearchFilters(
+            entity_name=args.entity,
+            provider=args.provider,
+        )
+
     retrieval = fe.get_retrieval_api()
-    results = retrieval.search(query=query, top_k=5)
+    results = retrieval.search(query=query, top_k=args.top_k, filters=filters)
 
     if not results:
         print("\nNo matching video chunks found. (Make sure you have embedded footage in the DB).")
@@ -37,6 +64,8 @@ def main():
         print(f"\n🏆 Rank #{rank} (Similarity Score: {res.score:.4f})")
         print(f"   • Chunk ID   : {res.chunk_id}")
         print(f"   • Provider   : {res.provider.upper()} ({res.media_type})")
+        if res.entity_name:
+            print(f"   • Entity     : {res.entity_name}")
         print(f"   • Time Range : {time_str}")
         print(f"   • Stream URL : {res.storage_url or res.source_url}")
 

@@ -17,6 +17,7 @@ class VectorRecord:
     duration_sec: Optional[float] = None
     embedding_model: str = "xclip-base-patch32"
     embedding_version: str = "1.0"
+    entity_id: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -31,6 +32,7 @@ class VectorSearchResult:
     provider: str
     media_type: str
     duration_sec: Optional[float] = None
+    entity_id: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
