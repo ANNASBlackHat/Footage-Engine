@@ -161,14 +161,6 @@ def process_item(
         vector_store.upsert(collection, records)
         session.flush()
 
-    if progress_counter is not None and progress_lock is not None:
-        with progress_lock:
-            progress_counter["done"] += 1
-            done = progress_counter["done"]
-            total = progress_counter["total"]
-            pct = int((done / total) * 100) if total else 100
-            print(f"  [{done}/{total}] ({pct}%) {item_id[:8]} indexed {len(records)} Qwen vector(s).", flush=True)
-
     return len(records)
 
 
@@ -213,13 +205,27 @@ def main() -> int:
         print(f"Would create {total_ranges} Qwen chunk(s).")
         return 0
 
-    # 2. Process items — parallel or sequential
-    progress = {"done": 0, "total": len(item_ids)}
+    # 2. Process items — parallel or sequential with continuous progress and failure skipping
+    total = len(item_ids)
     progress_lock = threading.Lock()
-    total_new = 0
-    failed = 0
+    done_count = 0
+    successes: list[dict] = []
+    failures: list[dict] = []
 
-    def _worker(iid: str) -> tuple[str, int, Optional[Exception]]:
+    def _record_result(iid: str, n: int, exc: Optional[Exception]):
+        nonlocal done_count
+        with progress_lock:
+            done_count += 1
+            pct = int((done_count / total) * 100) if total else 100
+            if exc is not None:
+                err_str = f"{type(exc).__name__}: {exc}"
+                failures.append({"id": iid, "error": err_str})
+                print(f"  [{done_count}/{total}] ({pct}%) [{iid[:8]}] SKIPPED (FAILED): {err_str}", flush=True)
+            else:
+                successes.append({"id": iid, "chunks": n})
+                print(f"  [{done_count}/{total}] ({pct}%) [{iid[:8]}] SUCCESS: indexed {n} Qwen chunk(s).", flush=True)
+
+    def _run_item(iid: str) -> tuple[str, int, Optional[Exception]]:
         try:
             n = process_item(
                 item_id=iid,
@@ -230,8 +236,6 @@ def main() -> int:
                 vector_store=vector_store,
                 collection=collection,
                 dry_run=False,
-                progress_counter=progress,
-                progress_lock=progress_lock,
             )
             return iid, n, None
         except Exception as e:
@@ -239,37 +243,30 @@ def main() -> int:
 
     if args.workers <= 1 or len(item_ids) <= 1:
         for iid in item_ids:
-            try:
-                n = process_item(
-                    item_id=iid,
-                    database_url=settings.DATABASE_URL,
-                    xclip_model=xclip_model,
-                    embedder=embedder,
-                    storage=storage,
-                    vector_store=vector_store,
-                    collection=collection,
-                    dry_run=False,
-                    progress_counter=progress,
-                    progress_lock=progress_lock,
-                )
-                total_new += n
-            except Exception as e:
-                failed += 1
-                print(f"  [{iid[:8]}] FAILED: {type(e).__name__}: {e}", flush=True)
+            _iid, n, exc = _run_item(iid)
+            _record_result(_iid, n, exc)
     else:
-        print(f"Processing {len(item_ids)} items with {args.workers} workers...", flush=True)
+        print(f"Processing {total} items with {args.workers} workers...", flush=True)
         with ThreadPoolExecutor(max_workers=args.workers) as executor:
-            futures = {executor.submit(_worker, iid): iid for iid in item_ids}
+            futures = {executor.submit(_run_item, iid): iid for iid in item_ids}
             for future in as_completed(futures):
                 iid, n, exc = future.result()
-                if exc:
-                    failed += 1
-                    print(f"  [{iid[:8]}] FAILED: {type(exc).__name__}: {exc}", flush=True)
-                else:
-                    total_new += n
+                _record_result(iid, n, exc)
 
-    print(f"Created {total_new} Qwen chunk(s), {failed} failed.")
-    return 0
+    total_chunks = sum(s["chunks"] for s in successes)
+    print("\n" + "=" * 65)
+    print("                    BACKFILL SUMMARY REPORT")
+    print("=" * 65)
+    print(f"  Total items evaluated:   {total}")
+    print(f"  Successfully processed:  {len(successes)} item(s) ({total_chunks} chunk(s) indexed)")
+    print(f"  Failed / Skipped:        {len(failures)} item(s)")
+
+    if failures:
+        print("\n  Failures breakdown:")
+        for f in failures:
+            print(f"    - [{f['id'][:8]}] {f['error']}")
+        print("\n  Note: Failed items were skipped without halting the process.")
+    print("=" * 65 + "\n")
 
 
 if __name__ == "__main__":

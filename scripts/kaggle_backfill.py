@@ -55,6 +55,7 @@ DEP_GROUPS = [
     ("psycopg2", "psycopg2-binary"),
     ("imagekitio", "imagekitio"),
     ("PIL", "pillow"),
+    ("yt_dlp", "yt-dlp"),
 ]
 
 

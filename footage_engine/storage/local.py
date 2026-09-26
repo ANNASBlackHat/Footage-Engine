@@ -66,9 +66,12 @@ class LocalStorageBackend:
             if not cached_file.exists() or cached_file.stat().st_size < 1000:
                 headers = {
                     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Referer": "https://commons.wikimedia.org/",
                     "Accept": "*/*"
                 }
+                if "wikimedia.org" in storage_path or "wikipedia.org" in storage_path:
+                    headers["Referer"] = "https://commons.wikimedia.org/"
+                elif "pexels.com" in storage_path:
+                    headers["Referer"] = "https://www.pexels.com/"
                 tmp_file = cached_file.with_suffix(cached_file.suffix + ".tmp")
                 success = False
                 for attempt in range(5):
