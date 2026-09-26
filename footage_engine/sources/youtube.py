@@ -266,8 +266,15 @@ class YouTubeAdapter:
         os.makedirs(target_dir, exist_ok=True)
 
         canonical_url = normalize_youtube_url(url)
+        # Prefer H.264/VP9 over AV1: software AV1 decode in OpenCV is slow and
+        # frequently yields "Failed to get pixel format" / "Get current frame error".
         opts = self._get_ydl_opts({
-            "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+            "format": (
+                "bestvideo[vcodec^=avc1]+bestaudio[ext=m4a]/"
+                "bestvideo[vcodec^=vp9]+bestaudio/"
+                "bestvideo[vcodec!=av01]+bestaudio/"
+                "best[vcodec!=av01]/best"
+            ),
             "outtmpl": target_path,
             "merge_output_format": "mp4",
             "overwrites": True,

@@ -151,6 +151,7 @@ class QwenEmbedder:
             # 2. Single-pass frame extraction — one VideoCapture, sorted seek
             all_frames: list[Optional[Image.Image]] = [None] * len(schedule_items)
             last_valid: Optional[Image.Image] = None
+            failed_per_chunk = [0] * num_chunks
 
             for slot_idx, (abs_ts, ci, fi) in enumerate(schedule_items):
                 cap.set(cv2.CAP_PROP_POS_MSEC, abs_ts * 1000.0)
@@ -160,8 +161,28 @@ class QwenEmbedder:
                     pil_img = Image.fromarray(rgb)
                     last_valid = pil_img
                     all_frames[slot_idx] = pil_img
-                elif last_valid is not None:
-                    all_frames[slot_idx] = last_valid
+                else:
+                    failed_per_chunk[ci] += 1
+                    if last_valid is not None:
+                        all_frames[slot_idx] = last_valid
+
+            for ci, n_failed in enumerate(failed_per_chunk):
+                if n_failed == 0:
+                    continue
+                s, e = chunk_ranges[ci]
+                rng = f"[{s:.1f}s-{f'{e:.1f}s' if e is not None else 'end'}]"
+                if n_failed == num_frames:
+                    print(
+                        f"    ⚠ ALL {n_failed}/{num_frames} frames failed to decode for "
+                        f"chunk {rng} — embedding is placeholder/black!",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        f"    ⚠ {n_failed}/{num_frames} frames failed to decode for "
+                        f"chunk {rng} (duplicated last good frame)",
+                        flush=True,
+                    )
 
         finally:
             cap.release()

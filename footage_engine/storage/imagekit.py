@@ -12,6 +12,22 @@ except ImportError:
     ImageKit = None  # type: ignore
 
 
+def _video_codec(path: str | Path) -> str:
+    """Returns the fourcc codec tag of a local video file ('' if unreadable)."""
+    try:
+        import cv2
+    except ImportError:
+        return ""
+    cap = cv2.VideoCapture(str(path))
+    try:
+        if not cap.isOpened():
+            return ""
+        fourcc = int(cap.get(cv2.CAP_PROP_FOURCC))
+        return "".join(chr((fourcc >> (8 * i)) & 0xFF) for i in range(4)).strip().lower()
+    finally:
+        cap.release()
+
+
 class ImageKitStorageBackend:
     """Stores raw footage files in ImageKit managed object storage."""
 
@@ -103,9 +119,24 @@ class ImageKitStorageBackend:
         if is_youtube_url(storage_path):
             vid = extract_youtube_video_id(storage_path) or "yt"
             cached_file = self.cache_dir / f"youtube_{vid}.mp4"
+            codec = ""
+            if cached_file.exists() and cached_file.stat().st_size >= 1000:
+                codec = _video_codec(cached_file)
+                # An AV1 cached file decodes badly in OpenCV (frame errors) and slowly in
+                # software — refetch it once with the non-AV1 format preference. The
+                # marker stops an endless refetch loop if AV1 is the only format served.
+                marker = cached_file.with_name(cached_file.name + ".av1_refetched")
+                if codec == "av01" and not marker.exists():
+                    print(f"    → Cached file is AV1, re-downloading without AV1: {cached_file}", flush=True)
+                    marker.touch()
+                    cached_file.unlink()
+                    codec = ""
             if not cached_file.exists() or cached_file.stat().st_size < 1000:
+                print(f"    → YouTube download: {storage_path} → {cached_file}", flush=True)
                 adapter = YouTubeAdapter()
                 adapter.download_to_path(storage_path, str(cached_file))
+            else:
+                print(f"    → YouTube cache hit: {cached_file} (codec={codec})", flush=True)
             return str(cached_file)
 
         if storage_path.startswith(("http://", "https://")):

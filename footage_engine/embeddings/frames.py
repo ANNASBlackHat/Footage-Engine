@@ -47,6 +47,7 @@ def sample_frames_from_video(
 
         frames: list[Image.Image] = []
         last_valid_frame = None
+        failed = 0
 
         for ts in target_timestamps:
             cap.set(cv2.CAP_PROP_POS_MSEC, ts * 1000.0)
@@ -57,9 +58,22 @@ def sample_frames_from_video(
                 pil_img = Image.fromarray(rgb)
                 last_valid_frame = pil_img
                 frames.append(pil_img)
-            elif last_valid_frame is not None:
-                # Fallback to duplicate last valid frame
-                frames.append(last_valid_frame)
+            else:
+                failed += 1
+                if last_valid_frame is not None:
+                    # Fallback to duplicate last valid frame
+                    frames.append(last_valid_frame)
+
+        if failed:
+            logger.warning(
+                f"{failed}/{num_frames} frame(s) failed to decode in "
+                f"{video_path} [{start_ts}-{end_ts}] (codec/platform decode issue)"
+            )
+            print(
+                f"    ⚠ {failed}/{num_frames} frames failed to decode in "
+                f"{video_path} [{start_ts:.1f}s-{end_ts if end_ts is not None else 'end'}]",
+                flush=True,
+            )
 
         # If no frames could be decoded, create placeholder black frames
         if not frames:
