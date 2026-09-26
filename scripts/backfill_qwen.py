@@ -114,7 +114,13 @@ def process_item(
 
         try:
             local_path = storage.get_local_path(item.storage_path)
-        except Exception:
+            print(f"    → [{item.id[:8]}] source=storage_path ({item.storage_path}) → {local_path}", flush=True)
+        except Exception as e:
+            print(
+                f"    → [{item.id[:8]}] storage_path failed ({item.storage_path}): "
+                f"{type(e).__name__}: {e} — falling back to source_url ({item.source_url})",
+                flush=True,
+            )
             local_path = storage.get_local_path(item.source_url)
 
         if item.media_type == MediaType.IMAGE:
