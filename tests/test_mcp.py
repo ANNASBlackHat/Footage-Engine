@@ -430,3 +430,35 @@ async def test_mcp_prompt_broll_match_beat(mcp_env):
     content_text = messages[0].content.text
     assert "rocket cleared the launch tower" in content_text
     assert "4.0s" in content_text
+
+
+@pytest.mark.anyio
+async def test_mcp_process_pending_queue_returns_batch_stats(mcp_env):
+    """Regression: this tool read a 'processed' key BatchProcessor never returns.
+
+    BatchProcessor.process_all_pending() returns {total, succeeded, failed}; the
+    tool used to raise KeyError on every call, which nothing caught because the
+    existing test only asserted the tool was listed.
+    """
+    server = mcp_env["server"]
+    storage = mcp_env["storage"]
+    settings = mcp_env["settings"]
+
+    storage.save_file(b"pending payload", "pending_clip.mp4")
+    with get_db_session(settings.DATABASE_URL) as session:
+        session.add(
+            MediaItem(
+                provider="manual",
+                source_url="https://example.com/pending_clip.mp4",
+                storage_path="pending_clip.mp4",
+                status=MediaStatus.PENDING,
+            )
+        )
+        session.flush()
+
+    res = await server.call_tool("process_pending_queue", {"max_items": 5})
+    assert not res.is_error
+    data = _parse_tool_result(res)
+    assert set(data) == {"processed", "failed", "total"}
+    assert data["total"] == 1
+    assert data["processed"] + data["failed"] == 1

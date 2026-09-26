@@ -29,6 +29,13 @@ from footage_engine.orchestrator import Orchestrator
 from footage_engine.pipeline.processor import BatchProcessor
 from footage_engine.retrieval.api import RetrievalAPI
 from footage_engine.retrieval.models import SearchFilters
+from footage_engine.retrieval.serialize import (
+    clip_details_response,
+    fine_localize_response,
+    media_item_details_response,
+    search_footage_response,
+    search_script_beat_response,
+)
 from footage_engine.storage import get_storage_backend
 from footage_engine.storage.base import StorageBackend
 from footage_engine.vector import get_vector_store
@@ -137,31 +144,7 @@ def create_mcp_server(
             )
 
         results = retrieval_api.search(query=query, top_k=top_k, filters=filters)
-        return {
-            "query": query,
-            "count": len(results),
-            "results": [
-                {
-                    "chunk_id": r.chunk_id,
-                    "media_item_id": r.media_item_id,
-                    "score": round(float(r.score), 4),
-                    "start_ts": round(float(r.start_ts), 2),
-                    "end_ts": round(float(r.end_ts), 2) if r.end_ts is not None else None,
-                    "duration_sec": round(float(r.duration_sec), 2) if r.duration_sec is not None else None,
-                    "media_type": r.media_type,
-                    "orientation": r.orientation,
-                    "aspect_ratio": r.aspect_ratio,
-                    "provider": r.provider,
-                    "entity_id": r.entity_id,
-                    "entity_name": r.entity_name,
-                    "storage_url": r.storage_url,
-                    "source_url": r.source_url,
-                    "resolution": r.resolution,
-                    "license_type": r.license_type,
-                }
-                for r in results
-            ],
-        }
+        return search_footage_response(query, results)
 
     @server.tool(
         name="search_script_beat",
@@ -203,32 +186,7 @@ def create_mcp_server(
             rerank=rerank,
             confidence_floor=confidence_floor,
         )
-        return {
-            "beat_text": beat_text,
-            "reranked": rerank,
-            "count": len(results),
-            "results": [
-                {
-                    "chunk_id": r.chunk_id,
-                    "media_item_id": r.media_item_id,
-                    "score": round(float(r.score), 4),
-                    "start_ts": round(float(r.start_ts), 2),
-                    "end_ts": round(float(r.end_ts), 2) if r.end_ts is not None else None,
-                    "duration_sec": round(float(r.duration_sec), 2) if r.duration_sec is not None else None,
-                    "media_type": r.media_type,
-                    "orientation": r.orientation,
-                    "aspect_ratio": r.aspect_ratio,
-                    "provider": r.provider,
-                    "entity_id": r.entity_id,
-                    "entity_name": r.entity_name,
-                    "storage_url": r.storage_url,
-                    "source_url": r.source_url,
-                    "resolution": r.resolution,
-                    "license_type": r.license_type,
-                }
-                for r in results
-            ],
-        }
+        return search_script_beat_response(beat_text, results, rerank)
 
     @server.tool(
         name="fine_localize_clip",
@@ -243,15 +201,14 @@ def create_mcp_server(
         orig_end = chunk_res.end_ts
 
         sub_start, sub_end = retrieval_api.fine_localize(chunk_id, query)
-        return {
-            "chunk_id": chunk_id,
-            "query": query,
-            "original_start_ts": round(float(orig_start), 2),
-            "original_end_ts": round(float(orig_end), 2) if orig_end is not None else None,
-            "refined_start_ts": round(float(sub_start), 2),
-            "refined_end_ts": round(float(sub_end), 2),
-            "refined_duration_sec": round(float(sub_end - sub_start), 2),
-        }
+        return fine_localize_response(
+            chunk_id=chunk_id,
+            query=query,
+            original_start_ts=orig_start,
+            original_end_ts=orig_end,
+            refined_start_ts=sub_start,
+            refined_end_ts=sub_end,
+        )
 
     @server.tool(
         name="get_clip_details",
@@ -262,21 +219,7 @@ def create_mcp_server(
     )
     def get_clip_details(chunk_id: str) -> dict[str, Any]:
         res = retrieval_api.get_chunk(chunk_id)
-        return {
-            "chunk_id": res.chunk_id,
-            "media_item_id": res.media_item_id,
-            "start_ts": res.start_ts,
-            "end_ts": res.end_ts,
-            "duration_sec": res.duration_sec,
-            "media_type": res.media_type,
-            "orientation": res.orientation,
-            "aspect_ratio": res.aspect_ratio,
-            "provider": res.provider,
-            "storage_url": res.storage_url,
-            "source_url": res.source_url,
-            "resolution": res.resolution,
-            "license_type": res.license_type,
-        }
+        return clip_details_response(res)
 
     @server.tool(
         name="get_media_item_details",
@@ -290,31 +233,7 @@ def create_mcp_server(
             item = session.get(MediaItem, media_item_id)
             if not item:
                 raise ValueError(f"MediaItem with id '{media_item_id}' not found.")
-            storage_url = storage.get_url(item.storage_path) if item.storage_path else ""
-            chunks_data = [
-                {
-                    "chunk_id": c.id,
-                    "start_ts": round(float(c.start_ts), 2),
-                    "end_ts": round(float(c.end_ts), 2) if c.end_ts is not None else None,
-                    "storage_path": c.storage_path,
-                    "usage_count": c.usage_count,
-                }
-                for c in item.chunks
-            ]
-            return {
-                "id": item.id,
-                "provider": item.provider,
-                "source_id": item.source_id,
-                "source_url": item.source_url,
-                "media_type": item.media_type.value,
-                "status": item.status.value,
-                "duration_sec": item.duration_sec,
-                "resolution": item.resolution,
-                "storage_path": item.storage_path,
-                "storage_url": storage_url,
-                "chunks_count": len(chunks_data),
-                "chunks": chunks_data,
-            }
+            return media_item_details_response(item, storage)
 
     @server.tool(
         name="ingest_url",
@@ -404,7 +323,7 @@ def create_mcp_server(
     def process_pending_queue(max_items: int = 20) -> dict[str, Any]:
         stats = batch_processor.process_all_pending(limit=max_items)
         return {
-            "processed": stats["processed"],
+            "processed": stats["succeeded"],
             "failed": stats["failed"],
             "total": stats["total"],
         }
