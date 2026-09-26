@@ -19,6 +19,10 @@ from footage_engine.models.media import MediaItem, MediaStatus
 from footage_engine.storage import get_storage_backend
 from footage_engine.vector import get_vector_store
 
+# ImageKit free-plan per-video upload cap (paid plans are higher: Lite 300MB, Pro 2GB).
+# Source: https://imagekit.io/docs/api-reference/upload-file/upload-file (File size limit)
+IMAGEKIT_FREE_PLAN_VIDEO_LIMIT_MB = 100
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -223,16 +227,29 @@ def main():
 
         # Handle Cloud/Storage Upload if configured
         if need_cloud_upload:
-            print(f"  → Uploading sliced clips to storage backend...", flush=True)
+            print(f"  → Uploading {len(results)} sliced clip(s) to storage backend...", flush=True)
             with get_db_session(cfg.DATABASE_URL) as session:
                 db_item = session.get(MediaItem, item.id)
+                uploaded_bytes = 0
                 for (idx, out_path, success), chunk in zip(results, db_item.chunks):
                     if success and os.path.exists(out_path):
                         with open(out_path, "rb") as cf:
                             chunk_bytes = cf.read()
-                        saved_path = storage.save_file(
-                            chunk_bytes, f"chunks/{db_item.id[:8]}_{chunk.id[:8]}.mp4"
+                        chunk_filename = f"chunks/{db_item.id[:8]}_{chunk.id[:8]}.mp4"
+                        size_mb = len(chunk_bytes) / (1024 * 1024)
+                        uploaded_bytes += len(chunk_bytes)
+                        print(
+                            f"    → Uploading chunk {idx + 1}/{len(chunks)} | {chunk_filename} | "
+                            f"{size_mb:.2f} MB | session total {uploaded_bytes / (1024 * 1024):.2f} MB",
+                            flush=True,
                         )
+                        if size_mb > IMAGEKIT_FREE_PLAN_VIDEO_LIMIT_MB:
+                            print(
+                                f"      ⚠ {size_mb:.2f} MB exceeds the "
+                                f"{IMAGEKIT_FREE_PLAN_VIDEO_LIMIT_MB} MB free-plan per-video upload limit.",
+                                flush=True,
+                            )
+                        saved_path = storage.save_file(chunk_bytes, chunk_filename)
                         chunk.storage_path = saved_path
                 session.commit()
             print("  ✓ Sliced clips uploaded to storage.", flush=True)

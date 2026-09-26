@@ -116,6 +116,11 @@ class BatchProcessor:
                                     with open(tmp_chunk_path, "rb") as cf:
                                         chunk_bytes = cf.read()
                                     chunk_filename = f"chunks/{item.id[:8]}_{chunk.id[:8]}.mp4"
+                                    print(
+                                        f"    → Uploading chunk {chunk_filename} "
+                                        f"({len(chunk_bytes) / (1024 * 1024):.2f} MB)...",
+                                        flush=True,
+                                    )
                                     saved_path = self.storage.save_file(chunk_bytes, chunk_filename)
                                     chunk.storage_path = saved_path
                                     logger.info(f"Uploaded physical chunk {chunk.id} to {saved_path}")

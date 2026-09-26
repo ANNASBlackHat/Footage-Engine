@@ -217,7 +217,11 @@ class Orchestrator:
             filename = f"{provider}_{safe_source_id}_{file_uuid[:8]}{ext}"
 
             # 3. Upload to storage backend
-            print(f"  → Uploading to {self.settings.STORAGE_BACKEND} storage ({filename})...", flush=True)
+            print(
+                f"  → Uploading to {self.settings.STORAGE_BACKEND} storage ({filename}) | "
+                f"{len(content) / (1024 * 1024):.2f} MB...",
+                flush=True,
+            )
             storage_path = self.storage.save_file(content, filename)
             print(f"    Stored at: {storage_path}", flush=True)
 
