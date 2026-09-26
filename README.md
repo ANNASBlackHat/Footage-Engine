@@ -55,6 +55,7 @@ footage-engine/
 │   └── test_live.py              # Quick provider API connectivity check
 ├── tests/                 # Automated unit and integration test suite
 ├── .env.example           # Template for environment configuration
+├── WORKER_API_DOC.md     # Integration guide for services consuming the job queue
 ├── pyproject.toml         # Project dependencies, build metadata, and pytest settings
 └── SPEC.md                # System specification and architecture design document
 ```
@@ -393,19 +394,26 @@ From any other language (JS, Go, ...), enqueue with plain SQL - nothing but the
 database is shared:
 
 ```sql
-INSERT INTO jobs (id, task, payload, status, backend, idempotency_key, created_at)
-VALUES (
-  gen_random_uuid()::text, 'search_footage',
-  '{"query": "harbour at dawn", "top_k": 5}'::jsonb,
-  'PENDING', 'qwen', 'beat-42', now()
-);
+-- status, attempts and created_at have server defaults: only these three are required
+INSERT INTO jobs (id, task, payload)
+VALUES ('<uuid>', 'search_footage', '{"query": "harbour at dawn", "top_k": 5}');
 
-SELECT status, result, error FROM jobs WHERE id = '<job id>';
+-- optional: pin to a worker backend and make the submit idempotent
+INSERT INTO jobs (id, task, payload, backend, idempotency_key)
+VALUES ('<uuid>', 'search_footage', '{"query": "harbour at dawn"}', 'qwen', 'beat-42');
+
+-- poll
+SELECT status, result, error FROM jobs WHERE id = '<uuid>';
 ```
 
-`idempotency_key` is unique, so a retried submit cannot enqueue the same request
-twice. `backend` pins a job to the `qwen` or `xclip` worker (they own separate
-vector collections).
+Stored `status` values are the enum **names** - `PENDING`, `PROCESSING`, `DONE`,
+`FAILED` - even though the Python API and CLI report them lowercase. On Postgres
+`status` is a native `jobstatus` enum, so an explicit insert needs a cast
+(`'PENDING'::jobstatus`). `idempotency_key` is unique, so a retried submit cannot
+enqueue the same request twice. `backend` pins a job to the `qwen` or `xclip`
+worker (they own separate vector collections).
+
+Full integration reference for another service: **[WORKER_API_DOC.md](WORKER_API_DOC.md)**.
 
 ### 2. Run a worker
 
