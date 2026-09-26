@@ -54,6 +54,11 @@ def parse_args():
         help="Use NVIDIA GPU hardware encoder (h264_nvenc) for fast re-encoding",
     )
     parser.add_argument(
+        "--skip-index",
+        action="store_true",
+        help="Skip X-CLIP embedding & vector indexing (only detect scenes and slice clips)",
+    )
+    parser.add_argument(
         "--cookies",
         type=str,
         default=None,
