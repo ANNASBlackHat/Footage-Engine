@@ -36,6 +36,11 @@ def init_db(database_url: str | None = None) -> None:
     """Initialize all database tables and migrate missing columns."""
     from sqlalchemy import inspect, text
 
+    # Imported for side effects: registers the jobs/workers tables on Base.metadata
+    # so create_all() builds them. Done here (not at module scope) to avoid a
+    # circular import with footage_engine.models.__init__.
+    from footage_engine.models import jobs as _jobs  # noqa: F401
+
     engine = get_engine(database_url)
     Base.metadata.create_all(bind=engine)
 

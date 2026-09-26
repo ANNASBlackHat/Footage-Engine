@@ -39,6 +39,7 @@ footage-engine/
 │   ├── sources/           # Stock media providers (Pexels, Pixabay, Coverr, Direct)
 │   ├── storage/           # Storage backends (Local filesystem, ImageKit)
 │   ├── vector/            # Vector store clients (Zilliz Cloud, In-Memory)
+│   ├── worker/            # Async job queue + worker (queue-driven footage search)
 │   ├── config.py          # Environment settings loaded via Pydantic
 │   └── orchestrator.py    # Ingestion orchestrator with pre-spend deduplication
 ├── scripts/               # Narrative workflow and dataset ingestion utilities
@@ -47,6 +48,10 @@ footage-engine/
 │   ├── ingest_found_assets.py    # Batch asset ingestion script
 │   ├── ingest_from_urls.py       # Ingest media from a file of URLs
 │   ├── ingest_story_footage.py   # Multi-provider narrative ingestion script
+│   ├── submit_job.py             # Enqueue a footage-search job and optionally wait
+│   ├── run_worker.py             # Run the async job worker locally
+│   ├── kaggle_worker.py          # Run the job worker on a Kaggle GPU
+│   ├── colab_worker.py           # Run the job worker on a Colab GPU VM
 │   └── test_live.py              # Quick provider API connectivity check
 ├── tests/                 # Automated unit and integration test suite
 ├── .env.example           # Template for environment configuration
@@ -332,6 +337,236 @@ uv run footage-engine-mcp --transport sse --host 0.0.0.0 --port 8000
 | **Resource** | `footage://chunks/{chunk_id}` | JSON payload of chunk metadata and stream URL. |
 | **Resource** | `footage://stats` | Live library statistics. |
 | **Prompt** | `broll-match-beat` | Directorial prompt translating narration text into optimal visual search queries. |
+
+---
+
+## Async Job Worker (footage search as a queue)
+
+The MCP server is synchronous: a caller holds a session open and waits. The job
+worker is its asynchronous counterpart - a caller submits a **footage-search
+request** as a row in the `jobs` table and collects the result later. Task names
+and payload keys are identical to the MCP tools, and both sides build their
+responses with the same serializers (`footage_engine/retrieval/serialize.py`),
+so a queued job returns exactly what the equivalent MCP tool returns.
+
+This is what lets a JS frontend (or any other language) on a different VM ask for
+B-roll while a Colab/Kaggle GPU does the embedding work.
+
+### Why a queue instead of just the MCP
+
+* `search_footage` and `search_script_beat` embed the query with the model.
+* `fine_localize_clip` embeds the query once and then **every sampled frame** of
+  the chunk - the heaviest GPU operation in the engine.
+* A queued job survives its worker dying: if an ephemeral Colab/Kaggle VM is
+  killed mid-search, the job is still there and becomes claimable again once its
+  lease expires.
+
+### 1. Submit jobs
+
+```bash
+# Queue a semantic search
+uv run python scripts/submit_job.py --query "container ship aerial" --wait
+
+# Queue a script beat (Multi-Query expansion + optional LLM judge)
+uv run python scripts/submit_job.py --task search_script_beat \
+  --beat "On March 4th, the USS Cyclops vanished." --rerank --wait
+
+# Refine the exact cut inside a winning chunk
+uv run python scripts/submit_job.py --task fine_localize_clip \
+  --chunk-id <chunk-id> --query "cargo vessel in storm" --wait
+
+# Inspect queue depth and live workers
+uv run python scripts/submit_job.py --stats
+```
+
+From Python:
+
+```python
+from footage_engine.worker import submit_search_footage, wait_for_job
+
+job_id = submit_search_footage("harbour at dawn", top_k=5, backend="qwen")
+job = wait_for_job(job_id=job_id, timeout_sec=300)
+print(job["result"]["results"])
+```
+
+From any other language (JS, Go, ...), enqueue with plain SQL - nothing but the
+database is shared:
+
+```sql
+INSERT INTO jobs (id, task, payload, status, backend, idempotency_key, created_at)
+VALUES (
+  gen_random_uuid()::text, 'search_footage',
+  '{"query": "harbour at dawn", "top_k": 5}'::jsonb,
+  'PENDING', 'qwen', 'beat-42', now()
+);
+
+SELECT status, result, error FROM jobs WHERE id = '<job id>';
+```
+
+`idempotency_key` is unique, so a retried submit cannot enqueue the same request
+twice. `backend` pins a job to the `qwen` or `xclip` worker (they own separate
+vector collections).
+
+### 2. Run a worker
+
+```bash
+# Local worker (X-CLIP on CPU/MPS)
+uv run python scripts/run_worker.py --backend xclip --idle-exit 60
+
+# Offline check with no model download
+uv run python scripts/run_worker.py --mock --dry-run
+
+# GPU worker on Kaggle / Colab (Qwen)
+python scripts/kaggle_worker.py --backend qwen --idle-exit 900
+python scripts/colab_worker.py  --backend qwen --idle-exit 900
+```
+
+| Flag | Meaning |
+|---|---|
+| `--backend {xclip,qwen}` | Which embedding model/collection this worker serves |
+| `--tasks A,B` | Allowlist, e.g. `search_footage,fine_localize_clip` |
+| `--concurrency N` | Jobs processed in parallel (default: 1) |
+| `--max-jobs N` | Exit after N jobs |
+| `--idle-exit SEC` | Exit after SEC idle seconds; `0` = run forever |
+| `--mock` | MockEmbedder - no neural network download |
+| `--dry-run` | Print resolved config and queue depth, then exit |
+
+### 3. How exclusivity works
+
+Claiming is a compare-and-swap `UPDATE` on the job row:
+
+```sql
+UPDATE jobs
+   SET status='processing', picked_by=:worker,
+       attempts=attempts+1, lease_expires_at=:exp
+ WHERE id = :candidate AND status='pending';  -- or an expired lease
+```
+
+`SELECT ... FOR UPDATE SKIP LOCKED` is deliberately **not** used: SQLite silently
+ignores it, so such a locking mistake would only ever surface in production. Every
+claim carries a lease which a heartbeat thread renews, so a worker that dies (or a
+Colab VM that gets killed) has its jobs reclaimed automatically. When nothing is
+double-executed, `jobs.attempts` stays at `1` for every job - which is exactly
+what `tests/test_worker.py` asserts under contention.
+
+### 4. Running on a Colab / Kaggle GPU
+
+The worker is meant to live where the GPU is. Anything that can reach the shared
+Postgres can be a caller, so the GPU box never needs an inbound port.
+
+**Prerequisites**
+
+| Requirement | Why |
+|---|---|
+| Hosted Postgres (`DATABASE_URL=postgresql://...`) | Colab and Kaggle cannot reach `localhost`; the laptop and the VM must share one queue |
+| `VECTOR_STORE=zilliz` | **Required for cross-VM search.** With the default `in_memory` each process holds a private index and a remote worker finds nothing |
+| GPU accelerator enabled | For `--backend qwen`; `EMBEDDING_DEVICE=auto` selects `cuda` when present |
+| `STORAGE_BACKEND=imagekit` (or a remote URL path) | `fine_localize_clip` must download the video. If the VM cannot resolve the file it returns the original cut bounds unchanged - a silent no-op |
+| `psycopg2-binary` | The Postgres driver is **not** declared in `pyproject.toml`; install it explicitly |
+| `colab` CLI: `pip install google-colab-cli` | Option A only |
+
+#### Option A - drive a Colab GPU VM from your laptop
+
+`scripts/colab_worker.py` mirrors `colab_backfill.py`: it bundles the repo code
+(never `.env`), serialises your local `Settings` into an env file, installs deps on
+the VM, runs the worker, then stops the VM.
+
+```bash
+pip install google-colab-cli          # once
+uv run python scripts/colab_worker.py --backend qwen --idle-exit 900
+```
+
+| Flag | Use |
+|---|---|
+| `--bundle-only` | Build and inspect the bundle without touching Colab |
+| `--dry-run` | Config + queue check on the VM, without loading the model |
+| `--keep` | Leave the VM running afterwards |
+| `--skip-setup` | Reuse an existing session and skip pip installs |
+| `--exec-timeout 7200` | Extend the `colab exec` window |
+
+`--idle-exit` is what stops the VM burning quota: `900` means "quit after 15
+minutes with nothing to do". `colab exec` is bounded by `--exec-timeout`, so for a
+worker that runs indefinitely use Option B instead.
+
+#### Option B - run it in a notebook cell (long-lived worker)
+
+Set the secrets **before** importing `footage_engine`, because `get_settings()` is
+cached:
+
+```python
+import os
+os.environ["DATABASE_URL"]          = "postgresql://user:pass@host:5432/footage_engine"
+os.environ["VECTOR_STORE"]          = "zilliz"
+os.environ["ZILLIZ_URI"]            = "..."
+os.environ["ZILLIZ_TOKEN"]          = "..."
+os.environ["QWEN_ZILLIZ_URI"]       = "..."
+os.environ["QWEN_ZILLIZ_TOKEN"]     = "..."
+os.environ["STORAGE_BACKEND"]       = "imagekit"
+os.environ["IMAGEKIT_PUBLIC_KEY"]   = "..."
+os.environ["IMAGEKIT_PRIVATE_KEY"]  = "..."
+os.environ["IMAGEKIT_URL_ENDPOINT"] = "..."
+os.environ["GEMINI_API_KEY"]        = "..."  # optional: Multi-Query + LLM judge
+```
+
+```python
+!git clone --depth 1 https://github.com/ANNASBlackHat/Footage-Engine.git
+%cd Footage-Engine
+!pip -q install -e ".[qwen,video]" psycopg2-binary
+!python scripts/run_worker.py --backend qwen --dry-run      # verify cheaply first
+!python scripts/run_worker.py --backend qwen --idle-exit 0  # then run
+```
+
+The first real run downloads torch and `Qwen/Qwen3-VL-Embedding-2B` (a few GB).
+`Ctrl-C` finishes in-flight jobs, returns unfinished ones to `pending`, and marks
+the worker `stopping`.
+
+#### Option C - Kaggle
+
+```python
+!git clone https://github.com/ANNASBlackHat/Footage-Engine.git
+%cd Footage-Engine
+!python scripts/kaggle_worker.py --backend qwen --idle-exit 900
+```
+
+Enable **Internet** and a **GPU accelerator** in the right-hand panel, then attach
+secrets under *Add-ons -> Secrets* (Kaggle exposes them as environment variables).
+`kaggle_worker.py` checks for `DATABASE_URL`, `VECTOR_STORE` and the `ZILLIZ_*` /
+`QWEN_ZILLIZ_*` names before starting, and installs only what Kaggle does not
+already ship.
+
+#### Confirming the worker is wired up
+
+```bash
+uv run python scripts/submit_job.py --stats
+```
+
+A healthy GPU worker appears in the output:
+
+```json
+{
+  "live_workers": 1,
+  "workers": [
+    { "id": "colab-vm:1234:qwen:9f2c1a4e", "hostname": "...", "backend": "qwen",
+      "device": "cuda (Tesla T4)", "status": "idle", "concurrency": 1 }
+  ]
+}
+```
+
+A worker counts as live while its heartbeat is newer than `default_stale_sec()`,
+which is derived from `WORKER_HEARTBEAT_SEC` so it always exceeds the heartbeat
+interval - a killed VM therefore drops off the list on its own. Jobs it was
+holding become claimable again after `WORKER_LEASE_SEC`; a job showing
+`attempts > 1` was retried after its worker died.
+
+Pin `--tasks` on a GPU worker so DB-only jobs do not consume GPU time:
+
+```bash
+uv run python scripts/colab_worker.py --backend qwen --tasks search_footage,search_script_beat,fine_localize_clip
+```
+
+> **Note:** cross-VM search requires `VECTOR_STORE=zilliz`. With the default
+> `in_memory` store each process holds a private index and a remote worker will
+> find nothing.
 
 ---
 

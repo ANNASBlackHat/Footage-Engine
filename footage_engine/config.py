@@ -87,6 +87,13 @@ class Settings(BaseSettings):
     EMBEDDING_BATCH_SIZE: int = 8  # Chunks per forward pass (increase to 16 on Colab GPU)
     PROCESS_NUM_WORKERS: int = 2  # Concurrent video processing threads (increase to 4 on Colab)
 
+    # Async Job Worker (queue-driven search on laptop, Colab or Kaggle GPU)
+    WORKER_LEASE_SEC: int = 900  # How long a claimed job stays owned before it can be reclaimed
+    WORKER_HEARTBEAT_SEC: int = 30  # Lease renewal / liveness interval
+    WORKER_POLL_INTERVAL_SEC: int = 5  # Sleep between empty queue polls
+    WORKER_IDLE_EXIT_SEC: int = 0  # 0 = run forever; >0 = exit after N idle seconds
+    WORKER_CONCURRENCY: int = 1  # Jobs processed in parallel by one worker process
+    WORKER_TASKS: str | None = None  # Optional comma-separated task allowlist
 
 
 @lru_cache()

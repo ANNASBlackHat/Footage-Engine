@@ -47,6 +47,8 @@ qwen = [
 
 [project.scripts]
 footage-engine-mcp = "footage_engine.mcp.server:main"
+footage-engine-worker = "footage_engine.worker.runner:main"
+footage-engine-submit = "footage_engine.worker.client:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
