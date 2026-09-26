@@ -25,7 +25,7 @@ Notes:
   - Start with `--dry-run --limit 5` to validate secrets/connectivity fast.
 
 Usage:
-    python scripts/kaggle_backfill.py [--limit N] [--dry-run] [--media-ids A,B] [--workers N] [--skip-deps]
+    python scripts/kaggle_backfill.py [--limit N] [--dry-run] [--media-ids A,B] [--workers N] [--skip-deps] [--cookies SOURCE]
 """
 
 import argparse
@@ -85,7 +85,13 @@ def main() -> int:
     ap.add_argument("--media-ids", default=None)
     ap.add_argument("--workers", type=int, default=2, help="Parallel video workers (default: 2 on Kaggle GPU).")
     ap.add_argument("--skip-deps", action="store_true", help="Skip dependency check/install.")
+    ap.add_argument("--cookies", default=None,
+                    help="YouTube cookies: local file path, URL, or raw Netscape/base64 cookie string "
+                         "(sets YOUTUBE_COOKIES).")
     args = ap.parse_args()
+
+    if args.cookies:
+        os.environ["YOUTUBE_COOKIES"] = args.cookies
 
     missing = check_env()
     if missing:
