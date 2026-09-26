@@ -6,8 +6,10 @@ downloads, no GPU, no network.
 
 import json
 import os
+import sqlite3
 import threading
 import time
+import uuid
 from datetime import timedelta
 
 import pytest
@@ -366,6 +368,46 @@ def test_stale_worker_is_not_live(worker_env):
         )
     assert count_live_workers(url) == 0
     assert count_live_workers(url, within_sec=600) == 1
+
+
+def test_raw_sql_insert_from_another_language_is_executed(worker_env):
+    """The documented integration contract for non-Python callers.
+
+    An external service only supplies (id, task, payload); status, attempts and
+    created_at come from server defaults, so a JS/Go/curl client needs no
+    knowledge of the ORM. Stored statuses are the enum NAMES, uppercase.
+    """
+    url = worker_env["database_url"]
+    db_path = url.replace("sqlite:///", "")
+    _seed_media(worker_env)
+
+    job_id = str(uuid.uuid4())
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO jobs (id, task, payload) VALUES (?, ?, ?)",
+            (job_id, "search_footage", json.dumps({"query": "ocean", "top_k": 1})),
+        )
+        conn.commit()
+        status, attempts = conn.execute(
+            "SELECT status, attempts FROM jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+
+    assert status == "PENDING"  # enum name, uppercase
+    assert attempts == 0
+
+    stats = _make_worker(worker_env).run(max_jobs=1, idle_exit_sec=5)
+    assert stats["processed"] == 1
+
+    with sqlite3.connect(db_path) as conn:
+        status, attempts, result, error = conn.execute(
+            "SELECT status, attempts, result, error FROM jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+
+    assert status == "DONE"
+    assert attempts == 1
+    assert error is None
+    assert json.loads(result)["count"] == 1
+
 
 
 # ---------------------------------------------------------------------------

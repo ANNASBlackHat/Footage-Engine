@@ -17,6 +17,8 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -44,17 +46,23 @@ class Job(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid_str)
     task: Mapped[str] = mapped_column(String(64), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
-    status: Mapped[JobStatus] = mapped_column(Enum(JobStatus), default=JobStatus.PENDING)
+    status: Mapped[JobStatus] = mapped_column(
+        Enum(JobStatus), default=JobStatus.PENDING, server_default=text("'PENDING'"), nullable=False
+    )
     result: Mapped[Optional[dict[str, Any]]] = mapped_column(JSON, nullable=True)
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    attempts: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0"), nullable=False
+    )
     # Which embedding backend may serve this job ('qwen'/'xclip'); NULL = any.
     backend: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     # Optional caller-supplied key so a retried submit cannot enqueue twice.
     idempotency_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     picked_by: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     lease_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, server_default=func.now(), nullable=False
+    )
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
