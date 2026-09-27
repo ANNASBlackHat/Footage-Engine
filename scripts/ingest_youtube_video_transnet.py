@@ -200,6 +200,10 @@ def main():
         for idx, chunk in enumerate(chunks):
             if not chunk.end_ts:
                 continue
+            # If only cloud upload is needed (no local export) and chunk was already uploaded, skip slicing
+            if need_cloud_upload and not need_local_export and chunk.storage_path:
+                continue
+
             if args.output_dir:
                 clip_out = os.path.join(args.output_dir, f"scene_{idx+1:03d}.mp4")
             else:
@@ -210,54 +214,108 @@ def main():
 
             clip_tasks.append((idx, chunk.start_ts, chunk.end_ts, clip_out))
 
-        def on_progress(done, total):
-            pct = int((done / total) * 100) if total else 100
-            print(f"    → Sliced {done}/{total} clips ({pct}%)...", end="\r", flush=True)
+        try:
+            results: list[tuple[int, str, bool]] = []
+            if clip_tasks:
+                def on_progress(done, total):
+                    pct = int((done / total) * 100) if total else 100
+                    print(f"    → Sliced {done}/{total} clips ({pct}%)...", end="\r", flush=True)
 
-        t_clip_start = time.time()
-        results = parallel_extract_clips(
-            video_path=local_path,
-            clips=clip_tasks,
-            max_workers=args.workers,
-            stream_copy=args.stream_copy,
-            use_nvenc=args.use_nvenc,
-            progress_callback=on_progress,
-        )
-        print(f"\n  ✓ Parallel clipping finished in {time.time() - t_clip_start:.2f}s.", flush=True)
+                t_clip_start = time.time()
+                results = parallel_extract_clips(
+                    video_path=local_path,
+                    clips=clip_tasks,
+                    max_workers=args.workers,
+                    stream_copy=args.stream_copy,
+                    use_nvenc=args.use_nvenc,
+                    progress_callback=on_progress,
+                )
+                print(f"\n  ✓ Parallel clipping finished in {time.time() - t_clip_start:.2f}s.", flush=True)
+            else:
+                print("  ✓ All required clips are already sliced or uploaded.", flush=True)
 
-        # Handle Cloud/Storage Upload if configured
-        if need_cloud_upload:
-            print(f"  → Uploading {len(results)} sliced clip(s) to storage backend...", flush=True)
-            with get_db_session(cfg.DATABASE_URL) as session:
-                db_item = session.get(MediaItem, item.id)
-                uploaded_bytes = 0
-                for (idx, out_path, success), chunk in zip(results, db_item.chunks):
-                    if success and os.path.exists(out_path):
-                        with open(out_path, "rb") as cf:
-                            chunk_bytes = cf.read()
-                        chunk_filename = f"chunks/{db_item.id[:8]}_{chunk.id[:8]}.mp4"
-                        size_mb = len(chunk_bytes) / (1024 * 1024)
-                        uploaded_bytes += len(chunk_bytes)
-                        print(
-                            f"    → Uploading chunk {idx + 1}/{len(chunks)} | {chunk_filename} | "
-                            f"{size_mb:.2f} MB | session total {uploaded_bytes / (1024 * 1024):.2f} MB",
-                            flush=True,
-                        )
-                        if size_mb > IMAGEKIT_FREE_PLAN_VIDEO_LIMIT_MB:
+            # Handle Cloud/Storage Upload if configured
+            if need_cloud_upload:
+                results_by_idx = {r[0]: (r[1], r[2]) for r in results}
+                with get_db_session(cfg.DATABASE_URL) as session:
+                    db_item = session.get(MediaItem, item.id)
+                    uploaded_bytes = 0
+                    uploaded_count = 0
+                    failed_count = 0
+                    already_uploaded = sum(1 for c in db_item.chunks if c.storage_path)
+
+                    if already_uploaded > 0:
+                        print(f"  → Found {already_uploaded}/{len(db_item.chunks)} chunk(s) already uploaded to storage.", flush=True)
+                    print(f"  → Uploading remaining sliced clip(s) to storage backend...", flush=True)
+
+                    for idx, chunk in enumerate(db_item.chunks):
+                        if chunk.storage_path:
+                            continue
+
+                        if idx not in results_by_idx:
+                            continue
+
+                        out_path, success = results_by_idx[idx]
+                        if not success or not os.path.exists(out_path):
+                            failed_count += 1
+                            continue
+
+                        try:
+                            with open(out_path, "rb") as cf:
+                                chunk_bytes = cf.read()
+                            chunk_filename = f"chunks/{db_item.id[:8]}_{chunk.id[:8]}.mp4"
+                            size_mb = len(chunk_bytes) / (1024 * 1024)
+                            uploaded_bytes += len(chunk_bytes)
                             print(
-                                f"      ⚠ {size_mb:.2f} MB exceeds the "
-                                f"{IMAGEKIT_FREE_PLAN_VIDEO_LIMIT_MB} MB free-plan per-video upload limit.",
+                                f"    → Uploading chunk {idx + 1}/{len(db_item.chunks)} | {chunk_filename} | "
+                                f"{size_mb:.2f} MB | session total {uploaded_bytes / (1024 * 1024):.2f} MB",
                                 flush=True,
                             )
-                        saved_path = storage.save_file(chunk_bytes, chunk_filename)
-                        chunk.storage_path = saved_path
-                session.commit()
-            print("  ✓ Sliced clips uploaded to storage.", flush=True)
+                            if size_mb > IMAGEKIT_FREE_PLAN_VIDEO_LIMIT_MB:
+                                print(
+                                    f"      ⚠ {size_mb:.2f} MB exceeds the "
+                                    f"{IMAGEKIT_FREE_PLAN_VIDEO_LIMIT_MB} MB free-plan per-video upload limit.",
+                                    flush=True,
+                                )
 
-        # Cleanup temporary files if created for cloud-only upload
-        for tmp_p in tmp_files_to_cleanup:
-            if os.path.exists(tmp_p):
-                os.remove(tmp_p)
+                            saved_path = storage.save_file(chunk_bytes, chunk_filename)
+                            chunk.storage_path = saved_path
+                            session.commit()  # Incremental commit per chunk so progress is never lost
+                            uploaded_count += 1
+
+                        except Exception as upload_err:
+                            session.rollback()
+                            failed_count += 1
+                            print(
+                                f"      ❌ Failed to upload chunk {idx + 1}: {upload_err}",
+                                flush=True,
+                            )
+                            err_str = str(upload_err).lower()
+                            if any(w in err_str for w in ["quota", "limit", "full", "space", "storage", "out of memory"]):
+                                print(
+                                    f"\n      ⚠️ Storage quota exceeded or storage full. Aborting further uploads.",
+                                    flush=True,
+                                )
+                                print(
+                                    f"      Progress preserved: {uploaded_count + already_uploaded} chunk(s) saved in DB.",
+                                    flush=True,
+                                )
+                                break
+
+                    print(
+                        f"  ✓ Sliced clips upload summary: {uploaded_count} uploaded, "
+                        f"{already_uploaded} previously uploaded, {failed_count} failed/skipped.",
+                        flush=True,
+                    )
+
+        finally:
+            # Cleanup temporary files if created for cloud-only upload
+            for tmp_p in tmp_files_to_cleanup:
+                try:
+                    if os.path.exists(tmp_p):
+                        os.remove(tmp_p)
+                except OSError:
+                    pass
     else:
         print(f"\n[3/4] Physical chunk slicing skipped (UPLOAD_CHUNKS_TO_STORAGE=False and no --output-dir).")
 
