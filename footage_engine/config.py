@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite:///./footage_engine.db"
 
     # Storage
-    STORAGE_BACKEND: Literal["local", "imagekit", "cloudinary"] = "local"
+    STORAGE_BACKEND: Literal["local", "imagekit", "cloudinary", "gdrive"] = "local"
     LOCAL_STORAGE_DIR: str = "./data/storage"
     UPLOAD_RAW_TO_STORAGE: bool = False  # If False, streams directly from source_url without uploading raw master
     UPLOAD_CHUNKS_TO_STORAGE: bool = False  # If True, slices individual scene chunks and uploads .mp4 files to storage
@@ -32,6 +32,24 @@ class Settings(BaseSettings):
     CLOUDINARY_API_KEY: str | None = None
     CLOUDINARY_API_SECRET: str | None = None
     CLOUDINARY_FOLDER: str = "footage_engine/raw"
+
+    # Google Drive Credentials (if using gdrive backend)
+    # Exactly one of the two below must be set: a path to the service account
+    # JSON key file, or the raw JSON itself for env-only deployments.
+    GDRIVE_SERVICE_ACCOUNT_FILE: str | None = None
+    GDRIVE_SERVICE_ACCOUNT_JSON: str | None = None
+    # Target container. At least one is required: a folder (id of a folder
+    # shared with the service account email) or a Shared Drive id (files land at
+    # that drive's root when no folder is given).
+    GDRIVE_FOLDER_ID: str | None = None
+    GDRIVE_DRIVE_ID: str | None = None
+    # Comma-separated OAuth scopes. ``drive`` is the default rather than
+    # ``drive.file``: the narrower scope only sees files this app created, so a
+    # folder shared *to* the service account would be invisible to exists()/read.
+    GDRIVE_SCOPES: str = "https://www.googleapis.com/auth/drive"
+    # Delivery URL shape for uploaded files. Drive has no CDN, so this is the
+    # documented direct-download link; swap it if your tenant behaves differently.
+    GDRIVE_URL_TEMPLATE: str = "https://drive.google.com/uc?export=download&id={file_id}"
 
     # Stock & Web Provider API Keys / Options
     PIXABAY_API_KEY: str | None = None

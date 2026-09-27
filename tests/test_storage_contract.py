@@ -11,10 +11,16 @@ import pytest
 
 from footage_engine.storage.base import StorageBackend
 from footage_engine.storage.cloudinary import CloudinaryStorageBackend
+from footage_engine.storage.gdrive import GoogleDriveStorageBackend
 from footage_engine.storage.imagekit import ImageKitStorageBackend
 from footage_engine.storage.local import LocalStorageBackend
 
-BACKENDS = (LocalStorageBackend, ImageKitStorageBackend, CloudinaryStorageBackend)
+BACKENDS = (
+    LocalStorageBackend,
+    ImageKitStorageBackend,
+    CloudinaryStorageBackend,
+    GoogleDriveStorageBackend,
+)
 
 PROTOCOL_METHODS = ("save_file", "get_file", "get_local_path", "get_url", "exists", "delete_file")
 

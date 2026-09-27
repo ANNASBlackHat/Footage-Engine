@@ -3,12 +3,13 @@
 from footage_engine.config import Settings, get_settings
 from footage_engine.storage.base import StorageBackend
 from footage_engine.storage.cloudinary import CloudinaryStorageBackend
+from footage_engine.storage.gdrive import GoogleDriveStorageBackend, split_scopes
 from footage_engine.storage.imagekit import ImageKitStorageBackend
 from footage_engine.storage.local import LocalStorageBackend
 
 _storage_instance: StorageBackend | None = None
 
-SUPPORTED_BACKENDS = ("local", "imagekit", "cloudinary")
+SUPPORTED_BACKENDS = ("local", "imagekit", "cloudinary", "gdrive")
 
 
 def get_storage_backend(settings: Settings | None = None) -> StorageBackend:
@@ -43,6 +44,26 @@ def get_storage_backend(settings: Settings | None = None) -> StorageBackend:
             api_secret=cfg.CLOUDINARY_API_SECRET,
             folder=cfg.CLOUDINARY_FOLDER,
         )
+    elif cfg.STORAGE_BACKEND == "gdrive":
+        if not (cfg.GDRIVE_SERVICE_ACCOUNT_FILE or cfg.GDRIVE_SERVICE_ACCOUNT_JSON):
+            raise ValueError(
+                "GDRIVE_SERVICE_ACCOUNT_FILE or GDRIVE_SERVICE_ACCOUNT_JSON must be "
+                "configured (exactly one)."
+            )
+        if not (cfg.GDRIVE_FOLDER_ID or cfg.GDRIVE_DRIVE_ID):
+            raise ValueError(
+                "GDRIVE_FOLDER_ID or GDRIVE_DRIVE_ID must be configured — a service "
+                "account has no Drive of its own, so uploads need an explicit target "
+                "it has been shared into."
+            )
+        backend = GoogleDriveStorageBackend(
+            credentials_file=cfg.GDRIVE_SERVICE_ACCOUNT_FILE,
+            credentials_json=cfg.GDRIVE_SERVICE_ACCOUNT_JSON,
+            folder_id=cfg.GDRIVE_FOLDER_ID,
+            drive_id=cfg.GDRIVE_DRIVE_ID,
+            scopes=split_scopes(cfg.GDRIVE_SCOPES),
+            url_template=cfg.GDRIVE_URL_TEMPLATE,
+        )
     elif cfg.STORAGE_BACKEND == "local":
         backend = LocalStorageBackend(base_dir=cfg.LOCAL_STORAGE_DIR)
     else:
@@ -64,6 +85,7 @@ __all__ = [
     "LocalStorageBackend",
     "ImageKitStorageBackend",
     "CloudinaryStorageBackend",
+    "GoogleDriveStorageBackend",
     "SUPPORTED_BACKENDS",
     "get_storage_backend",
 ]

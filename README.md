@@ -116,7 +116,7 @@ Configure your `.env` file according to the options defined in `.env.example` / 
 | `DATABASE_URL` | `sqlite:///./footage_engine.db` | Database connection string (SQLite or PostgreSQL) |
 | **Storage Backend** | | |
 | `UPLOAD_RAW_TO_STORAGE` | `false` | If `true`, uploads raw media to storage; if `false`, streams from source |
-| `STORAGE_BACKEND` | `local` / `imagekit` / `cloudinary` | Storage provider backend (`local`, `imagekit` or `cloudinary`) |
+| `STORAGE_BACKEND` | `local` / `imagekit` / `cloudinary` / `gdrive` | Storage provider backend (`local`, `imagekit`, `cloudinary` or `gdrive`) |
 | `LOCAL_STORAGE_DIR` | `./data/storage` | Directory path when using local file storage |
 | `IMAGEKIT_PUBLIC_KEY` | string | ImageKit public key |
 | `IMAGEKIT_PRIVATE_KEY` | string | ImageKit private key |
@@ -125,6 +125,12 @@ Configure your `.env` file according to the options defined in `.env.example` / 
 | `CLOUDINARY_API_KEY` | string | Cloudinary API key |
 | `CLOUDINARY_API_SECRET` | string | Cloudinary API secret |
 | `CLOUDINARY_FOLDER` | `footage_engine/raw` | Cloudinary folder that uploads are rooted at |
+| `GDRIVE_SERVICE_ACCOUNT_FILE` | string | Path to the Google service account JSON key (requires the `gdrive` extra); mutually exclusive with `GDRIVE_SERVICE_ACCOUNT_JSON` |
+| `GDRIVE_SERVICE_ACCOUNT_JSON` | string | Raw contents of the Google service account JSON key (for env-only deployments) |
+| `GDRIVE_FOLDER_ID` | string | Drive folder shared with the service account's `client_email` |
+| `GDRIVE_DRIVE_ID` | string | Shared Drive id the service account was added to (files land at its root when no folder is set) |
+| `GDRIVE_SCOPES` | `https://www.googleapis.com/auth/drive` | Comma-separated OAuth scopes; must stay the full `drive` scope to see files shared *to* the service account |
+| `GDRIVE_URL_TEMPLATE` | `https://drive.google.com/uc?export=download&id={file_id}` | Public download link template returned by `get_url` |
 | **Vector Store** | | |
 | `VECTOR_STORE` | `in_memory` / `zilliz` | Vector store backend (defaults to fast in-memory store if empty) |
 | `ZILLIZ_URI` | string | Zilliz Cloud / Milvus cluster URI |

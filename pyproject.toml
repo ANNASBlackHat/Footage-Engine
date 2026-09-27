@@ -37,6 +37,11 @@ cloudinary = [
     "cloudinary>=1.40.0",
 ]
 
+gdrive = [
+    "google-api-python-client>=2.12.0",
+    "google-auth>=2.29.0",
+]
+
 mcp = [
     "mcp>=1.2.0",
 ]
