@@ -1,8 +1,9 @@
 """Local disk storage backend."""
 
-import os
 from pathlib import Path
 from typing import BinaryIO
+
+from footage_engine.storage._remote_cache import resolve_remote_reference
 
 
 class LocalStorageBackend:
@@ -24,6 +25,7 @@ class LocalStorageBackend:
         file_data: bytes | BinaryIO,
         filename: str,
         content_type: str | None = None,
+        media_type: str | None = None,
     ) -> str:
         target_path = self._resolve_path(filename)
         target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -46,64 +48,12 @@ class LocalStorageBackend:
             return f.read()
 
     def get_local_path(self, storage_path: str) -> str:
-        import requests
-        import time
-        from footage_engine.sources.youtube import YouTubeAdapter, extract_youtube_video_id, is_youtube_url
+        # YouTube links, plain HTTP URLs and ``file://`` references are handled
+        # by the shared resolver; anything left is one of our own local files.
+        resolved = resolve_remote_reference(storage_path, self.cache_dir)
+        if resolved is not None:
+            return resolved
 
-        if is_youtube_url(storage_path):
-            vid = extract_youtube_video_id(storage_path) or "yt"
-            cached_file = self.cache_dir / f"youtube_{vid}.mp4"
-            if not cached_file.exists() or cached_file.stat().st_size < 1000:
-                adapter = YouTubeAdapter()
-                adapter.download_to_path(storage_path, str(cached_file))
-            return str(cached_file)
-
-        if storage_path.startswith(("http://", "https://")):
-            clean_name = storage_path.split("?")[0].split("/")[-1]
-            if not clean_name.endswith((".mp4", ".webm", ".ogv", ".mov", ".mkv", ".jpg", ".jpeg", ".png", ".webp")):
-                clean_name += ".mp4"
-            cached_file = self.cache_dir / clean_name
-            if not cached_file.exists() or cached_file.stat().st_size < 1000:
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Accept": "*/*"
-                }
-                if "wikimedia.org" in storage_path or "wikipedia.org" in storage_path:
-                    headers["Referer"] = "https://commons.wikimedia.org/"
-                elif "pexels.com" in storage_path:
-                    headers["Referer"] = "https://www.pexels.com/"
-                tmp_file = cached_file.with_suffix(cached_file.suffix + ".tmp")
-                success = False
-                for attempt in range(5):
-                    try:
-                        resp = requests.get(storage_path, headers=headers, stream=True, timeout=60)
-                        if resp.status_code == 429:
-                            time.sleep(4 * (attempt + 1))
-                            continue
-                        resp.raise_for_status()
-                        ctype = resp.headers.get("content-type", "").lower()
-                        if "text/html" in ctype or "text/plain" in ctype:
-                            time.sleep(3 * (attempt + 1))
-                            continue
-                        with open(tmp_file, "wb") as f:
-                            for chunk in resp.iter_content(chunk_size=65536):
-                                if chunk:
-                                    f.write(chunk)
-                        if tmp_file.stat().st_size > 1000:
-                            tmp_file.replace(cached_file)
-                            success = True
-                            break
-                    except Exception as e:
-                        if attempt == 4:
-                            if tmp_file.exists():
-                                tmp_file.unlink()
-                            raise e
-                        time.sleep(3 * (attempt + 1))
-                if not success and tmp_file.exists():
-                    tmp_file.unlink()
-            return str(cached_file)
-        if storage_path.startswith("file://"):
-            return storage_path[7:]
         file_path = self._resolve_path(storage_path)
         if not file_path.exists():
             raise FileNotFoundError(f"File not found in storage: {storage_path}")

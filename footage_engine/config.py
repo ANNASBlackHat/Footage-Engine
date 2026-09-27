@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite:///./footage_engine.db"
 
     # Storage
-    STORAGE_BACKEND: Literal["local", "imagekit"] = "local"
+    STORAGE_BACKEND: Literal["local", "imagekit", "cloudinary"] = "local"
     LOCAL_STORAGE_DIR: str = "./data/storage"
     UPLOAD_RAW_TO_STORAGE: bool = False  # If False, streams directly from source_url without uploading raw master
     UPLOAD_CHUNKS_TO_STORAGE: bool = False  # If True, slices individual scene chunks and uploads .mp4 files to storage
@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     IMAGEKIT_PUBLIC_KEY: str | None = None
     IMAGEKIT_PRIVATE_KEY: str | None = None
     IMAGEKIT_URL_ENDPOINT: str | None = None
+
+    # Cloudinary Credentials (if using cloudinary backend)
+    CLOUDINARY_CLOUD_NAME: str | None = None
+    CLOUDINARY_API_KEY: str | None = None
+    CLOUDINARY_API_SECRET: str | None = None
+    CLOUDINARY_FOLDER: str = "footage_engine/raw"
 
     # Stock & Web Provider API Keys / Options
     PIXABAY_API_KEY: str | None = None

@@ -359,6 +359,20 @@ wheels = [
 ]
 
 [[package]]
+name = "cloudinary"
+version = "1.46.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "certifi" },
+    { name = "six" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d9/da/a837db79b7a233611583a0040a04ebc0c835e04e38878a4b2ca58cbe3ab9/cloudinary-1.46.2.tar.gz", hash = "sha256:491ebf4f66ded86a7cff31151e85056520e5a184caf42c7de71b3025da358b95", size = 232297, upload-time = "2026-08-27T15:07:58.353Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/32/98/e68ad32066b7900200e23a457c600296ce1f8fb768f161fdbb03e5ed2633/cloudinary-1.46.2-py3-none-any.whl", hash = "sha256:c552d819cd76cb7cd3c15a8a5ea23557ed6ad0ded661ad4b3f3b46ff353fc391", size = 192542, upload-time = "2026-08-27T15:07:57.191Z" },
+]
+
+[[package]]
 name = "cloudpickle"
 version = "3.1.2"
 source = { registry = "https://pypi.org/simple" }
@@ -557,6 +571,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+cloudinary = [
+    { name = "cloudinary" },
+]
 dev = [
     { name = "pytest" },
     { name = "pytest-mock" },
@@ -587,6 +604,7 @@ video = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cloudinary", marker = "extra == 'cloudinary'", specifier = ">=1.40.0" },
     { name = "imagekitio", specifier = ">=3.0.0" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.2.0" },
     { name = "numpy", marker = "extra == 'qwen'", specifier = ">=1.24.0" },
@@ -610,7 +628,7 @@ requires-dist = [
     { name = "transformers", marker = "extra == 'video'", specifier = ">=4.36.0" },
     { name = "yt-dlp", specifier = ">=2024.0.0" },
 ]
-provides-extras = ["dev", "video", "mcp", "qwen"]
+provides-extras = ["dev", "video", "cloudinary", "mcp", "qwen"]
 
 [[package]]
 name = "fsspec"

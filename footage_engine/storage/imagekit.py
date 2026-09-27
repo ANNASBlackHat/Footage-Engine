@@ -6,26 +6,12 @@ from pathlib import Path
 from typing import BinaryIO
 import requests
 
+from footage_engine.storage._remote_cache import resolve_remote_reference
+
 try:
     from imagekitio import ImageKit
 except ImportError:
     ImageKit = None  # type: ignore
-
-
-def _video_codec(path: str | Path) -> str:
-    """Returns the fourcc codec tag of a local video file ('' if unreadable)."""
-    try:
-        import cv2
-    except ImportError:
-        return ""
-    cap = cv2.VideoCapture(str(path))
-    try:
-        if not cap.isOpened():
-            return ""
-        fourcc = int(cap.get(cv2.CAP_PROP_FOURCC))
-        return "".join(chr((fourcc >> (8 * i)) & 0xFF) for i in range(4)).strip().lower()
-    finally:
-        cap.release()
 
 
 class ImageKitStorageBackend:
@@ -65,6 +51,7 @@ class ImageKitStorageBackend:
         file_data: bytes | BinaryIO,
         filename: str,
         content_type: str | None = None,
+        media_type: str | None = None,
     ) -> str:
         folder = "/footage_engine/raw"
         
@@ -114,78 +101,13 @@ class ImageKitStorageBackend:
         return resp.content
 
     def get_local_path(self, storage_path: str) -> str:
-        from footage_engine.sources.youtube import YouTubeAdapter, extract_youtube_video_id, is_youtube_url
+        # YouTube links, plain HTTP URLs and ``file://`` references are handled
+        # by the shared resolver; anything left is an asset this backend owns,
+        # so it is downloaded into the local cache on first use.
+        resolved = resolve_remote_reference(storage_path, self.cache_dir)
+        if resolved is not None:
+            return resolved
 
-        if is_youtube_url(storage_path):
-            vid = extract_youtube_video_id(storage_path) or "yt"
-            cached_file = self.cache_dir / f"youtube_{vid}.mp4"
-            codec = ""
-            if cached_file.exists() and cached_file.stat().st_size >= 1000:
-                codec = _video_codec(cached_file)
-                # An AV1 cached file decodes badly in OpenCV (frame errors) and slowly in
-                # software — refetch it once with the non-AV1 format preference. The
-                # marker stops an endless refetch loop if AV1 is the only format served.
-                marker = cached_file.with_name(cached_file.name + ".av1_refetched")
-                if codec == "av01" and not marker.exists():
-                    print(f"    → Cached file is AV1, re-downloading without AV1: {cached_file}", flush=True)
-                    marker.touch()
-                    cached_file.unlink()
-                    codec = ""
-            if not cached_file.exists() or cached_file.stat().st_size < 1000:
-                print(f"    → YouTube download: {storage_path} → {cached_file}", flush=True)
-                adapter = YouTubeAdapter()
-                adapter.download_to_path(storage_path, str(cached_file))
-            else:
-                print(f"    → YouTube cache hit: {cached_file} (codec={codec})", flush=True)
-            return str(cached_file)
-
-        if storage_path.startswith(("http://", "https://")):
-            import time
-            clean_name = storage_path.split("?")[0].split("/")[-1]
-            if not clean_name.endswith((".mp4", ".webm", ".ogv", ".mov", ".mkv", ".jpg", ".jpeg", ".png", ".webp")):
-                clean_name += ".mp4"
-            cached_file = self.cache_dir / clean_name
-            if not cached_file.exists() or cached_file.stat().st_size < 1000:
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Accept": "*/*"
-                }
-                if "wikimedia.org" in storage_path or "wikipedia.org" in storage_path:
-                    headers["Referer"] = "https://commons.wikimedia.org/"
-                elif "pexels.com" in storage_path:
-                    headers["Referer"] = "https://www.pexels.com/"
-                tmp_file = cached_file.with_suffix(cached_file.suffix + ".tmp")
-                success = False
-                for attempt in range(5):
-                    try:
-                        resp = requests.get(storage_path, headers=headers, stream=True, timeout=60)
-                        if resp.status_code == 429:
-                            time.sleep(4 * (attempt + 1))
-                            continue
-                        resp.raise_for_status()
-                        ctype = resp.headers.get("content-type", "").lower()
-                        if "text/html" in ctype or "text/plain" in ctype:
-                            time.sleep(3 * (attempt + 1))
-                            continue
-                        with open(tmp_file, "wb") as f:
-                            for chunk in resp.iter_content(chunk_size=65536):
-                                if chunk:
-                                    f.write(chunk)
-                        if tmp_file.stat().st_size > 1000:
-                            tmp_file.replace(cached_file)
-                            success = True
-                            break
-                    except Exception as e:
-                        if attempt == 4:
-                            if tmp_file.exists():
-                                tmp_file.unlink()
-                            raise e
-                        time.sleep(3 * (attempt + 1))
-                if not success and tmp_file.exists():
-                    tmp_file.unlink()
-            return str(cached_file)
-        if storage_path.startswith("file://"):
-            return storage_path[7:]
         clean_name = storage_path.replace("/", "_").lstrip("_")
         cached_file = self.cache_dir / clean_name
         if not cached_file.exists():

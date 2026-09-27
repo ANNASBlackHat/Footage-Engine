@@ -14,7 +14,7 @@ Verified from `pyproject.toml` and `uv.lock`:
 - **Computer Vision & Video Processing:** OpenCV (`opencv-python-headless`), PySceneDetect (`scenedetect[opencv]`), Pillow (`PIL`)
 - **Multimodal AI & Embeddings:** PyTorch (`torch`), HuggingFace Transformers (Microsoft X-CLIP `microsoft/xclip-base-patch32`), NumPy
 - **Vector Database:** Zilliz Cloud / Milvus (`pymilvus`) with fast In-Memory Vector Store fallback
-- **Storage Backends:** Local Filesystem, ImageKit.io (`imagekitio`)
+- **Storage Backends:** Local Filesystem, ImageKit.io (`imagekitio`), Cloudinary (`cloudinary`, optional extra)
 - **Stock & Web Media Providers:** REST API clients for Pexels, Pixabay, Coverr, YouTube (via `yt-dlp`), and direct URLs
 - **Testing:** `pytest`, `pytest-mock`
 - **Package & Dependency Management:** `uv` / `setuptools`
@@ -37,7 +37,7 @@ footage-engine/
 │   ├── pipeline/          # Resumable batch processor for pending media items
 │   ├── retrieval/         # Vector search, hybrid filtering, and fine localization
 │   ├── sources/           # Stock media providers (Pexels, Pixabay, Coverr, Direct)
-│   ├── storage/           # Storage backends (Local filesystem, ImageKit)
+│   ├── storage/           # Storage backends (Local filesystem, ImageKit, Cloudinary)
 │   ├── vector/            # Vector store clients (Zilliz Cloud, In-Memory)
 │   ├── worker/            # Async job queue + worker (queue-driven footage search)
 │   ├── config.py          # Environment settings loaded via Pydantic
@@ -116,11 +116,15 @@ Configure your `.env` file according to the options defined in `.env.example` / 
 | `DATABASE_URL` | `sqlite:///./footage_engine.db` | Database connection string (SQLite or PostgreSQL) |
 | **Storage Backend** | | |
 | `UPLOAD_RAW_TO_STORAGE` | `false` | If `true`, uploads raw media to storage; if `false`, streams from source |
-| `STORAGE_BACKEND` | `local` / `imagekit` | Storage provider backend (`local` or `imagekit`) |
+| `STORAGE_BACKEND` | `local` / `imagekit` / `cloudinary` | Storage provider backend (`local`, `imagekit` or `cloudinary`) |
 | `LOCAL_STORAGE_DIR` | `./data/storage` | Directory path when using local file storage |
 | `IMAGEKIT_PUBLIC_KEY` | string | ImageKit public key |
 | `IMAGEKIT_PRIVATE_KEY` | string | ImageKit private key |
 | `IMAGEKIT_URL_ENDPOINT` | string | ImageKit URL endpoint |
+| `CLOUDINARY_CLOUD_NAME` | string | Cloudinary cloud name (requires the `cloudinary` extra) |
+| `CLOUDINARY_API_KEY` | string | Cloudinary API key |
+| `CLOUDINARY_API_SECRET` | string | Cloudinary API secret |
+| `CLOUDINARY_FOLDER` | `footage_engine/raw` | Cloudinary folder that uploads are rooted at |
 | **Vector Store** | | |
 | `VECTOR_STORE` | `in_memory` / `zilliz` | Vector store backend (defaults to fast in-memory store if empty) |
 | `ZILLIZ_URI` | string | Zilliz Cloud / Milvus cluster URI |

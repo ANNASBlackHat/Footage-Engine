@@ -33,6 +33,10 @@ video = [
     "pillow>=10.0.0",
 ]
 
+cloudinary = [
+    "cloudinary>=1.40.0",
+]
+
 mcp = [
     "mcp>=1.2.0",
 ]
