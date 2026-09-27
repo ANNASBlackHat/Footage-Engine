@@ -83,7 +83,7 @@ def get_xclip_ranges(database_url: str, item_id: str, xclip_model: str) -> list[
         return [
             (c.start_ts, c.end_ts)
             for c in item.chunks
-            if c.embedding_model == xclip_model
+            if c.embedding_model in (xclip_model, "xclip-base-patch32", "microsoft/xclip-base-patch32")
         ]
 
 

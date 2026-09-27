@@ -7,6 +7,10 @@ import sys
 import tempfile
 import time
 
+repo_root = str(Path(__file__).resolve().parent.parent)
+if repo_root not in sys.path:
+    sys.path.insert(0, repo_root)
+
 import footage_engine as fe
 from footage_engine.chunking.detector import create_chunks_in_db
 from footage_engine.chunking.transnet_detector import (
@@ -63,6 +67,11 @@ def parse_args():
         help="Skip X-CLIP embedding & vector indexing (only detect scenes and slice clips)",
     )
     parser.add_argument(
+        "--skip-qwen",
+        action="store_true",
+        help="Skip Qwen2-VL embeddings even if Qwen Zilliz credentials or collection are set in environment",
+    )
+    parser.add_argument(
         "--cookies",
         type=str,
         default=None,
@@ -106,6 +115,13 @@ def main():
     storage = get_storage_backend(cfg)
     vec_store = get_vector_store(cfg) if not args.skip_index else None
 
+    # Auto-detect if Qwen vector credentials / collection are configured
+    has_qwen_configured = bool(
+        (cfg.QWEN_ZILLIZ_URI and cfg.QWEN_ZILLIZ_TOKEN)
+        or cfg.QWEN_ZILLIZ_COLLECTION_NAME
+    )
+    run_qwen = has_qwen_configured and not args.skip_qwen and not args.skip_index
+
     print("=" * 80, flush=True)
     print("🎬 Footage Engine — TransNetV2 Ingestion & Multi-Threaded Clipping", flush=True)
     print("=" * 80, flush=True)
@@ -125,6 +141,13 @@ def main():
     if args.stream_copy:
         print(f"• Stream Copy  : Enabled (-c copy)", flush=True)
     print(f"• Vector Store : {cfg.VECTOR_STORE if not args.skip_index else 'Skipped'}", flush=True)
+    if run_qwen:
+        qwen_col = cfg.QWEN_ZILLIZ_COLLECTION_NAME or cfg.ZILLIZ_COLLECTION_NAME
+        print(f"• Qwen Embed   : Enabled (Collection: {qwen_col})", flush=True)
+    elif has_qwen_configured and args.skip_qwen:
+        print(f"• Qwen Embed   : Skipped (--skip-qwen flag)", flush=True)
+    else:
+        print(f"• Qwen Embed   : Not configured (QWEN_ZILLIZ_URI/TOKEN or QWEN_ZILLIZ_COLLECTION_NAME not set)", flush=True)
     print("=" * 80, flush=True)
 
     start_time = time.time()
@@ -145,9 +168,19 @@ def main():
     print(f"  ✓ Status       : {item.status.value}", flush=True)
 
     if item.status == fe.MediaStatus.DONE and not args.output_dir:
-        print(f"\n✨ This video has ALREADY been processed and indexed! (Found {len(item.chunks)} chunks in DB).", flush=True)
-        print("You can search it immediately using: uv run python scripts/search_cli.py \"<your search query>\"")
-        return
+        with get_db_session(cfg.DATABASE_URL) as session:
+            db_item = session.get(MediaItem, item.id)
+            has_qwen_chunks = any(
+                c.embedding_model == cfg.QWEN_MODEL_NAME
+                for c in (db_item.chunks if db_item else [])
+            )
+        if run_qwen and not has_qwen_chunks:
+            print(f"\n✨ Video is indexed with X-CLIP, but Qwen embeddings are missing.", flush=True)
+            print("  Proceeding to compute Qwen embeddings...", flush=True)
+        else:
+            print(f"\n✨ This video has ALREADY been processed and indexed! (Found {len(item.chunks)} chunks in DB).", flush=True)
+            print("You can search it immediately using: uv run python scripts/search_cli.py \"<your search query>\"")
+            return
 
     # Resolve local path
     try:
@@ -179,6 +212,8 @@ def main():
                 media_item=db_item,
                 candidates=candidates,
                 session=session,
+                embedding_model=cfg.DEFAULT_EMBEDDING_MODEL,
+                embedding_version=cfg.DEFAULT_EMBEDDING_VERSION,
             )
             session.commit()
             print(f"  ✓ Stored {len(chunks)} chunk records in database.", flush=True)
@@ -328,6 +363,52 @@ def main():
         )
         ok = processor.process_item(item.id)
         if ok:
+            print("  ✓ X-CLIP indexing completed successfully.", flush=True)
+
+            # Step 4b: Optional Qwen Embedding
+            if run_qwen:
+                try:
+                    from footage_engine.embeddings import collection_name_for, get_embedder
+                    from scripts.backfill_qwen import process_item as process_qwen_item
+
+                    qwen_collection = collection_name_for(cfg, "qwen")
+                    print(
+                        f"\n  → Computing Qwen embeddings ({cfg.QWEN_MODEL_NAME}) "
+                        f"& indexing into collection '{qwen_collection}'...",
+                        flush=True,
+                    )
+                    t_qwen_start = time.time()
+                    qwen_embedder = get_embedder(cfg, backend="qwen")
+                    qwen_vec_store = get_vector_store(cfg, backend="qwen")
+
+                    with get_db_session(cfg.DATABASE_URL) as session:
+                        db_item = session.get(MediaItem, item.id)
+                        already_has_qwen = any(
+                            c.embedding_model == qwen_embedder.model_name
+                            for c in (db_item.chunks if db_item else [])
+                        )
+
+                    if already_has_qwen:
+                        print("  ✓ Qwen chunks already exist in DB for this item. Skipping Qwen embedding.", flush=True)
+                    else:
+                        n_qwen = process_qwen_item(
+                            item_id=item.id,
+                            database_url=cfg.DATABASE_URL,
+                            xclip_model=cfg.DEFAULT_EMBEDDING_MODEL,
+                            embedder=qwen_embedder,
+                            storage=storage,
+                            vector_store=qwen_vec_store,
+                            collection=qwen_collection,
+                            dry_run=False,
+                        )
+                        print(f"  ✓ Indexed {n_qwen} Qwen chunk(s) in {time.time() - t_qwen_start:.1f}s.", flush=True)
+                except Exception as qwen_err:
+                    print(
+                        f"  ⚠️ Qwen embedding failed: {qwen_err} "
+                        f"(X-CLIP embeddings remain intact and searchable).",
+                        flush=True,
+                    )
+
             elapsed = time.time() - start_time
             print("\n" + "=" * 80, flush=True)
             print(f"✨ Successfully indexed with TransNetV2 in {elapsed:.1f}s!", flush=True)
