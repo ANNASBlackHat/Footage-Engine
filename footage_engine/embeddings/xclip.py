@@ -63,6 +63,18 @@ class XCLIPEmbedder:
             return features[0]
         return features
 
+    def _extract_pixel_values(self, inputs: dict) -> "torch.Tensor":
+        """Robustly extracts the pixel_values tensor across different transformers versions."""
+        if "pixel_values" in inputs:
+            return inputs["pixel_values"]
+        if "pixel_values_videos" in inputs:
+            return inputs["pixel_values_videos"]
+        if "videos" in inputs:
+            return inputs["videos"]
+        if len(inputs) == 1:
+            return next(iter(inputs.values()))
+        raise KeyError(f"Could not find pixel_values in processor output keys: {list(inputs.keys())}")
+
     def embed_video(
         self,
         video_path: str,
@@ -80,9 +92,10 @@ class XCLIPEmbedder:
 
         inputs = self.processor(videos=[frames], return_tensors="pt")
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        pixel_values = self._extract_pixel_values(inputs)
 
         with torch.no_grad():
-            video_features = self.model.get_video_features(**inputs)
+            video_features = self.model.get_video_features(pixel_values=pixel_values)
             video_features = self._extract_tensor(video_features)
             # L2 normalize
             normalized = video_features / video_features.norm(p=2, dim=-1, keepdim=True)
@@ -116,9 +129,10 @@ class XCLIPEmbedder:
 
             inputs = self.processor(videos=batch_frames, return_tensors="pt")
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            pixel_values = self._extract_pixel_values(inputs)
 
             with torch.no_grad():
-                video_features = self.model.get_video_features(**inputs)
+                video_features = self.model.get_video_features(pixel_values=pixel_values)
                 video_features = self._extract_tensor(video_features)
                 # L2 normalize
                 normalized = video_features / video_features.norm(p=2, dim=-1, keepdim=True)
@@ -136,9 +150,10 @@ class XCLIPEmbedder:
         frames = [img] * 8
         inputs = self.processor(videos=[frames], return_tensors="pt")
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        pixel_values = self._extract_pixel_values(inputs)
 
         with torch.no_grad():
-            video_features = self.model.get_video_features(**inputs)
+            video_features = self.model.get_video_features(pixel_values=pixel_values)
             video_features = self._extract_tensor(video_features)
             normalized = video_features / video_features.norm(p=2, dim=-1, keepdim=True)
 
@@ -150,7 +165,13 @@ class XCLIPEmbedder:
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
         with torch.no_grad():
-            text_features = self.model.get_text_features(**inputs)
+            if "input_ids" in inputs:
+                text_features = self.model.get_text_features(
+                    input_ids=inputs["input_ids"],
+                    attention_mask=inputs.get("attention_mask"),
+                )
+            else:
+                text_features = self.model.get_text_features(**inputs)
             text_features = self._extract_tensor(text_features)
             normalized = text_features / text_features.norm(p=2, dim=-1, keepdim=True)
 
