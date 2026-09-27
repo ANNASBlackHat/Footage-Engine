@@ -221,7 +221,7 @@ class BatchProcessor:
         workers = max(1, min(workers, len(item_ids) or 1))
 
         logger.info(f"Found {len(item_ids)} media items to process with {workers} worker(s).")
-        stats = {"total": len(item_ids), "succeeded": 0, "failed": 0}
+        stats = {"total": len(item_ids), "succeeded": 0, "failed": 0, "succeeded_ids": []}
 
         if workers <= 1 or len(item_ids) <= 1:
             # Sequential processing
@@ -229,6 +229,7 @@ class BatchProcessor:
                 ok = self.process_item(iid)
                 if ok:
                     stats["succeeded"] += 1
+                    stats["succeeded_ids"].append(iid)
                 else:
                     stats["failed"] += 1
         else:
@@ -242,6 +243,7 @@ class BatchProcessor:
                         ok = future.result()
                         if ok:
                             stats["succeeded"] += 1
+                            stats["succeeded_ids"].append(iid)
                         else:
                             stats["failed"] += 1
                     except Exception as exc:
