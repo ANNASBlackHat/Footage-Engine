@@ -56,9 +56,16 @@ def init_db(database_url: str | None = None) -> None:
                         conn.execute(text("CREATE INDEX ix_media_items_entity_id ON media_items (entity_id)"))
                     except Exception:
                         pass
+        if "chunks" in inspector.get_table_names():
+            chunk_cols = [c["name"] for c in inspector.get_columns("chunks")]
+            with engine.begin() as conn:
+                if "motion_mean" not in chunk_cols:
+                    conn.execute(text("ALTER TABLE chunks ADD COLUMN motion_mean FLOAT"))
+                if "motion_std" not in chunk_cols:
+                    conn.execute(text("ALTER TABLE chunks ADD COLUMN motion_std FLOAT"))
     except Exception as e:
         import logging
-        logging.getLogger(__name__).warning(f"Could not inspect or auto-migrate media_items schema: {e}")
+        logging.getLogger(__name__).warning(f"Could not inspect or auto-migrate database schema: {e}")
 
 
 def get_session_factory(database_url: str | None = None) -> sessionmaker[Session]:

@@ -162,6 +162,8 @@ class Chunk(Base):
     storage_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     caption: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     tags: Mapped[Optional[list[str]]] = mapped_column(JSON, nullable=True)
+    motion_mean: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    motion_std: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     usage_count: Mapped[int] = mapped_column(Integer, default=0)
     last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
