@@ -19,8 +19,14 @@ Usage:
 """
 
 import argparse
+import os
 import sys
 import time
+
+# Suppress low-level FFmpeg C-library warnings on early stream termination
+os.environ["OPENCV_FFMPEG_LOGLEVEL"] = "-8"
+os.environ["OPENCV_LOG_LEVEL"] = "OFF"
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
