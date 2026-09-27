@@ -63,17 +63,35 @@ class XCLIPEmbedder:
             return features[0]
         return features
 
-    def _extract_pixel_values(self, inputs: dict) -> "torch.Tensor":
-        """Robustly extracts the pixel_values tensor across different transformers versions."""
-        if "pixel_values" in inputs:
-            return inputs["pixel_values"]
-        if "pixel_values_videos" in inputs:
-            return inputs["pixel_values_videos"]
-        if "videos" in inputs:
-            return inputs["videos"]
-        if len(inputs) == 1:
-            return next(iter(inputs.values()))
-        raise KeyError(f"Could not find pixel_values in processor output keys: {list(inputs.keys())}")
+    def _preprocess_video_frames(self, frames_batch: list[list[Any]]) -> "torch.Tensor":
+        """Preprocesses a batch of video frame lists into a pixel_values tensor on the target device.
+
+        Directly uses self.processor.image_processor (VideoMAEImageProcessor) to bypass
+        transformers ProcessorMixin / XCLIPProcessor argument routing issues across versions.
+        """
+        # 1. Direct call to underlying image_processor (most robust across all transformers versions)
+        if hasattr(self.processor, "image_processor"):
+            inputs = self.processor.image_processor(frames_batch, return_tensors="pt")
+            if "pixel_values" in inputs:
+                return inputs["pixel_values"].to(self.device)
+
+        # 2. Try processor with videos=
+        try:
+            inputs = self.processor(videos=frames_batch, return_tensors="pt")
+            if "pixel_values" in inputs:
+                return inputs["pixel_values"].to(self.device)
+        except Exception:
+            pass
+
+        # 3. Try processor with images= (newer ProcessorMixin mapping)
+        try:
+            inputs = self.processor(images=frames_batch, return_tensors="pt")
+            if "pixel_values" in inputs:
+                return inputs["pixel_values"].to(self.device)
+        except Exception:
+            pass
+
+        raise RuntimeError("Failed to extract pixel_values tensor from XCLIP processor.")
 
     def embed_video(
         self,
@@ -90,9 +108,7 @@ class XCLIPEmbedder:
             num_frames=num_frames,
         )
 
-        inputs = self.processor(videos=[frames], return_tensors="pt")
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}
-        pixel_values = self._extract_pixel_values(inputs)
+        pixel_values = self._preprocess_video_frames([frames])
 
         with torch.no_grad():
             video_features = self.model.get_video_features(pixel_values=pixel_values)
@@ -127,9 +143,7 @@ class XCLIPEmbedder:
                 for s_ts, e_ts in batch_slice
             ]
 
-            inputs = self.processor(videos=batch_frames, return_tensors="pt")
-            inputs = {k: v.to(self.device) for k, v in inputs.items()}
-            pixel_values = self._extract_pixel_values(inputs)
+            pixel_values = self._preprocess_video_frames(batch_frames)
 
             with torch.no_grad():
                 video_features = self.model.get_video_features(pixel_values=pixel_values)
@@ -148,9 +162,7 @@ class XCLIPEmbedder:
         else:
             img = image.convert("RGB")
         frames = [img] * 8
-        inputs = self.processor(videos=[frames], return_tensors="pt")
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}
-        pixel_values = self._extract_pixel_values(inputs)
+        pixel_values = self._preprocess_video_frames([frames])
 
         with torch.no_grad():
             video_features = self.model.get_video_features(pixel_values=pixel_values)
