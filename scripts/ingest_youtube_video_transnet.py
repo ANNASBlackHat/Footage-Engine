@@ -88,6 +88,12 @@ def parse_args():
         help="Canonical entity name to associate with this footage (e.g. 'USS Cyclops', 'Aye-aye')",
     )
     parser.add_argument(
+        "--upload-chunks",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Upload sliced scene chunks to cloud storage (overrides UPLOAD_CHUNKS_TO_STORAGE env)",
+    )
+    parser.add_argument(
         "--entity-type", default="other",
         help="Entity type if creating a new entity ('ship', 'animal', 'person', 'location', 'event', 'other')",
     )
@@ -222,7 +228,7 @@ def main():
 
     # Step 3: Multi-threaded parallel clipping
     need_local_export = bool(args.output_dir)
-    need_cloud_upload = bool(cfg.UPLOAD_CHUNKS_TO_STORAGE)
+    need_cloud_upload = bool(args.upload_chunks if args.upload_chunks is not None else cfg.UPLOAD_CHUNKS_TO_STORAGE)
 
     if need_local_export or need_cloud_upload:
         print(f"\n[3/4] Parallel clipping {len(chunks)} scene(s) with {args.workers} workers...", flush=True)
