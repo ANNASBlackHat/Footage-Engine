@@ -74,14 +74,22 @@ def find_items_needing_backfill(
     return list(rows)
 
 
-def get_xclip_ranges(database_url: str, item_id: str, xclip_model: str) -> list[tuple[float, Optional[float]]]:
-    """Load X-CLIP chunk time ranges for a single item."""
+def get_xclip_chunks_meta(database_url: str, item_id: str, xclip_model: str) -> list[dict]:
+    """Load X-CLIP chunk time ranges and metadata for a single item."""
     with get_db_session(database_url) as session:
         item = session.get(MediaItem, item_id)
         if not item:
             return []
         return [
-            (c.start_ts, c.end_ts)
+            {
+                "start_ts": c.start_ts,
+                "end_ts": c.end_ts,
+                "storage_path": c.storage_path,
+                "caption": c.caption,
+                "tags": c.tags,
+                "motion_mean": getattr(c, "motion_mean", None),
+                "motion_std": getattr(c, "motion_std", None),
+            }
             for c in item.chunks
             if c.embedding_model in (xclip_model, "xclip-base-patch32", "microsoft/xclip-base-patch32")
         ]
@@ -100,9 +108,11 @@ def process_item(
     progress_lock: Optional[threading.Lock] = None,
 ) -> int:
     """Embed a single item's missing Qwen chunks. Returns number of new chunks created."""
-    ranges = get_xclip_ranges(database_url, item_id, xclip_model)
-    if not ranges:
+    chunk_metas = get_xclip_chunks_meta(database_url, item_id, xclip_model)
+    if not chunk_metas:
         return 0
+
+    ranges = [(m["start_ts"], m["end_ts"]) for m in chunk_metas]
 
     if dry_run:
         return len(ranges)
@@ -138,12 +148,19 @@ def process_item(
             ]
 
         records: list[VectorRecord] = []
-        for (s_ts, e_ts), vec in zip(ranges, vecs):
+        for meta, vec in zip(chunk_metas, vecs):
+            s_ts = meta["start_ts"]
+            e_ts = meta["end_ts"]
             chunk = Chunk(
                 media_item_id=item.id,
                 start_ts=s_ts,
                 end_ts=e_ts,
                 media_type=item.media_type,
+                storage_path=meta.get("storage_path"),
+                caption=meta.get("caption"),
+                tags=meta.get("tags"),
+                motion_mean=meta.get("motion_mean"),
+                motion_std=meta.get("motion_std"),
                 embedding_model=embedder.model_name,
                 embedding_version=embedder.version,
             )
