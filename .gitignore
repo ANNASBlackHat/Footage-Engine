@@ -69,3 +69,8 @@ Thumbs.db
 *.swo
 *~
 .ipynb_checkpoints/
+
+# Kaggle secret bundle. `kaggle datasets create` uploads whatever is in this
+# directory, so the generated env file must never reach git — it holds the
+# database password, Zilliz tokens, and the Drive OAuth token.
+kaggle/dataset/runtime.env

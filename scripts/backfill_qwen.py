@@ -34,6 +34,16 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--media-ids", default=None, help="Comma-separated MediaItem IDs (subset).")
     ap.add_argument("--dry-run", action="store_true", help="Report what would be done without writing.")
     ap.add_argument("--workers", type=int, default=1, help="Parallel video processing workers (default: 1).")
+    ap.add_argument(
+        "--chunk-batch",
+        type=int,
+        default=25,
+        help=(
+            "Chunks embedded per forward pass (default: 25). Qwen decodes every frame "
+            "of every chunk up front, so an entire long item in one call exhausts RAM "
+            "(a 220-chunk item is ~1760 full-resolution frames). Lower it on small GPUs."
+        ),
+    )
     args, _unknown = ap.parse_known_args()  # tolerate kernel argv (e.g. Colab's -f flag)
     return args
 
@@ -106,6 +116,7 @@ def process_item(
     dry_run: bool = False,
     progress_counter: Optional[dict] = None,
     progress_lock: Optional[threading.Lock] = None,
+    chunk_batch: int = 25,
 ) -> int:
     """Embed a single item's missing Qwen chunks. Returns number of new chunks created."""
     chunk_metas = get_xclip_chunks_meta(database_url, item_id, xclip_model)
@@ -136,11 +147,21 @@ def process_item(
         if item.media_type == MediaType.IMAGE:
             vecs = [embedder.embed_image(local_path) for _ in ranges]
         elif hasattr(embedder, "embed_video_batch"):
-            vecs = embedder.embed_video_batch(
-                video_path=local_path,
-                chunk_ranges=ranges,
-                batch_size=8,
-            )
+            # Embed in bounded groups: embed_video_batch decodes all frames for
+            # every chunk it is handed before encoding any of them, so a whole
+            # long item in one call holds thousands of full-resolution frames.
+            group = max(1, chunk_batch)
+            vecs = []
+            for i in range(0, len(ranges), group):
+                vecs.extend(
+                    embedder.embed_video_batch(
+                        video_path=local_path,
+                        chunk_ranges=ranges[i : i + group],
+                        batch_size=8,
+                    )
+                )
+                if len(ranges) > group:
+                    print(f"    → embedded {min(i + group, len(ranges))}/{len(ranges)} chunks", flush=True)
         else:
             vecs = [
                 embedder.embed_video(video_path=local_path, start_ts=s, end_ts=e)
@@ -203,6 +224,7 @@ def main() -> int:
     print(f"Qwen backfill: model={qwen_model} dim={embedder.dimension} collection={collection}")
     print(f"  X-CLIP model: {xclip_model}")
     print(f"  Workers: {args.workers}")
+    print(f"  Chunk batch: {args.chunk_batch}")
 
     # 1. Single SQL query — find items needing backfill (no per-item scan)
     media_ids = [i.strip() for i in args.media_ids.split(",") if i.strip()] if args.media_ids else None
@@ -259,6 +281,7 @@ def main() -> int:
                 vector_store=vector_store,
                 collection=collection,
                 dry_run=False,
+                chunk_batch=args.chunk_batch,
             )
             return iid, n, None
         except Exception as e:

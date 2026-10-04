@@ -1,13 +1,17 @@
 {
-  "id": "annasblackhat/footage-engine-yt-ingest",
-  "title": "Footage Engine - YouTube Ingest",
+  "id": "annasblackhat/footage-engine-youtube-ingest",
+  "title": "Footage Engine Youtube Ingest",
   "code_file": "yt_ingest.ipynb",
   "language": "python",
   "kernel_type": "notebook",
   "is_private": true,
   "enable_gpu": true,
-  "keywords": ["footage-engine"],
-  "dataset_sources": [],
+  "keywords": [
+    "footage-engine"
+  ],
+  "dataset_sources": [
+    "annasblackhat/footage-engine-secrets"
+  ],
   "competition_sources": [],
   "kernel_sources": [],
   "model_sources": []

@@ -1,0 +1,6 @@
+{
+  "title": "Footage Engine runtime secrets (PRIVATE)",
+  "id": "annasblackhat/footage-engine-secrets",
+  "licenses": [{"name": "other"}],
+  "isPrivate": true
+}
