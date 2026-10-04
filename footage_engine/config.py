@@ -34,10 +34,16 @@ class Settings(BaseSettings):
     CLOUDINARY_FOLDER: str = "footage_engine/raw"
 
     # Google Drive Credentials (if using gdrive backend)
-    # Exactly one of the two below must be set: a path to the service account
-    # JSON key file, or the raw JSON itself for env-only deployments.
+    # Exactly one identity must be configured. Either a service account
+    # (headless, but Google gives it no storage quota — Shared Drives only)...
     GDRIVE_SERVICE_ACCOUNT_FILE: str | None = None
     GDRIVE_SERVICE_ACCOUNT_JSON: str | None = None
+    # ...or a user OAuth token from a one-time consent flow, which uploads as
+    # the consenting user so files are owned by them and use their quota. This
+    # is the only option that can write to an ordinary personal Drive folder.
+    # Mint one with: python scripts/gdrive_oauth_login.py
+    GDRIVE_OAUTH_CREDENTIALS_FILE: str | None = None
+    GDRIVE_OAUTH_CREDENTIALS_JSON: str | None = None
     # Target container. At least one is required: a folder (id of a folder
     # shared with the service account email) or a Shared Drive id (files land at
     # that drive's root when no folder is given).

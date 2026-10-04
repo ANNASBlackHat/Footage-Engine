@@ -1,5 +1,7 @@
 """Tests for the storage backend factory."""
 
+import json
+
 import pytest
 
 import footage_engine.storage as storage_module
@@ -14,8 +16,23 @@ def reset_singleton(monkeypatch):
     monkeypatch.setattr(storage_module, "_storage_instance", None)
 
 
+# Settings resolves the developer's real .env (model_config["env_file"] wins over
+# the ``_env_file`` argument in this pydantic-settings version), so every Drive
+# credential var has to be neutralised by default or a local .env leaks into the
+# tests. Individual gdrive tests opt back in explicitly.
+_GDRIVE_VARS = (
+    "GDRIVE_SERVICE_ACCOUNT_FILE",
+    "GDRIVE_SERVICE_ACCOUNT_JSON",
+    "GDRIVE_OAUTH_CREDENTIALS_FILE",
+    "GDRIVE_OAUTH_CREDENTIALS_JSON",
+    "GDRIVE_FOLDER_ID",
+    "GDRIVE_DRIVE_ID",
+)
+
+
 def _settings(**overrides) -> Settings:
     base = {"DATABASE_URL": "sqlite:///:memory:", "STORAGE_BACKEND": "local"}
+    base.update({name: None for name in _GDRIVE_VARS})
     base.update(overrides)
     return Settings(**base)
 
@@ -131,6 +148,74 @@ def test_gdrive_backend_is_built_from_settings(monkeypatch):
     assert built["folder_id"] == "folder-9"
     assert built["scopes"] == ["https://www.googleapis.com/auth/drive.file"]
     assert built["url_template"] == "https://lh3.googleusercontent.com/d/{file_id}"
+
+
+def test_gdrive_backend_accepts_a_user_oauth_token(monkeypatch):
+    built = {}
+
+    class StubGDriveBackend:
+        def __init__(self, **kwargs):
+            built.update(kwargs)
+
+    monkeypatch.setattr(storage_module, "GoogleDriveStorageBackend", StubGDriveBackend)
+
+    token = json.dumps(
+        {
+            "type": "authorized_user",
+            "client_id": "c",
+            "client_secret": "s",
+            "refresh_token": "r",
+            "token_uri": "https://oauth2.googleapis.com/token",
+        }
+    )
+    get_storage_backend(
+        _settings(
+            STORAGE_BACKEND="gdrive",
+            GDRIVE_SERVICE_ACCOUNT_FILE=None,
+            GDRIVE_SERVICE_ACCOUNT_JSON=None,
+            GDRIVE_OAUTH_CREDENTIALS_FILE=None,
+            GDRIVE_OAUTH_CREDENTIALS_JSON=token,
+            GDRIVE_FOLDER_ID="folder-9",
+        )
+    )
+
+    assert built["oauth_credentials_json"] == token
+    assert built["credentials_json"] is None
+
+
+def test_gdrive_backend_rejects_two_identities(monkeypatch):
+    """A service account plus an OAuth token is ambiguous, not a merge."""
+    class StubGDriveBackend:
+        def __init__(self, **kwargs):
+            raise AssertionError("must not build with two identities")
+
+    monkeypatch.setattr(storage_module, "GoogleDriveStorageBackend", StubGDriveBackend)
+
+    with pytest.raises(ValueError, match="exactly one Google Drive credential identity"):
+        get_storage_backend(
+            _settings(
+                STORAGE_BACKEND="gdrive",
+                GDRIVE_SERVICE_ACCOUNT_FILE="/tmp/sa.json",
+                GDRIVE_SERVICE_ACCOUNT_JSON=None,
+                GDRIVE_OAUTH_CREDENTIALS_FILE="/tmp/token.json",
+                GDRIVE_OAUTH_CREDENTIALS_JSON=None,
+                GDRIVE_FOLDER_ID="folder-9",
+            )
+        )
+
+
+def test_gdrive_backend_rejects_no_identity():
+    with pytest.raises(ValueError, match="neither was set"):
+        get_storage_backend(
+            _settings(
+                STORAGE_BACKEND="gdrive",
+                GDRIVE_SERVICE_ACCOUNT_FILE=None,
+                GDRIVE_SERVICE_ACCOUNT_JSON=None,
+                GDRIVE_OAUTH_CREDENTIALS_FILE=None,
+                GDRIVE_OAUTH_CREDENTIALS_JSON=None,
+                GDRIVE_FOLDER_ID="folder-9",
+            )
+        )
 
 
 def test_unsupported_backend_fails_instead_of_falling_back_to_disk(tmp_path):

@@ -40,6 +40,9 @@ cloudinary = [
 gdrive = [
     "google-api-python-client>=2.12.0",
     "google-auth>=2.29.0",
+    # Only needed to mint a user OAuth token (scripts/gdrive_oauth_login.py);
+    # the backend itself reads an already-saved token.
+    "google-auth-oauthlib>=1.2.0",
 ]
 
 mcp = [

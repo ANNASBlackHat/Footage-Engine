@@ -18,11 +18,23 @@ and shape this module:
   cannot be used to fetch bytes: content download goes through
   ``files.get(alt="media")`` with the service account's bearer token.
 
-Auth is a **service account**, not an API key (an API key cannot authorize
-writes) and not a browser OAuth consent flow (this is a headless worker). A
-service account owns no Drive of its own, so ``GDRIVE_FOLDER_ID`` must name a
-folder shared with the service account's ``client_email``, or ``GDRIVE_DRIVE_ID``
-a Shared Drive it has been added to.
+Auth comes in two identities, and which one you need is not a style choice —
+it decides whether uploads are possible at all:
+
+* **Service account** (``GDRIVE_SERVICE_ACCOUNT_FILE``/``_JSON``). Headless,
+  no consent flow, but Google gives it ``storageQuota.limit == 0`` and rejects
+  writes to ordinary folders with ``403 Service Accounts do not have storage
+  quota``. Only a Shared Drive accepts its uploads. Useful for a Shared Drive,
+  useless for a personal Drive folder.
+* **User OAuth** (``GDRIVE_OAUTH_CREDENTIALS_FILE``/``_JSON``). A one-time
+  consent flow in a browser yields a refresh token; uploads then run as the
+  consenting user, are **owned by them**, and consume *their* quota. This is
+  the only way to write to a normal personal Drive folder.
+
+A service account also owns no Drive of its own, so ``GDRIVE_FOLDER_ID`` must
+name a folder shared with the service account's ``client_email``, or
+``GDRIVE_DRIVE_ID`` a Shared Drive it has been added to. Under user OAuth the
+folder instead has to be one the consenting user can write to.
 
 Known limitation: Google prescribes truncated exponential backoff for
 ``rateLimitExceeded`` / ``userRateLimitExceeded``; this backend applies it with
@@ -48,12 +60,14 @@ from footage_engine.storage._remote_cache import (
 )
 
 try:
+    from google.oauth2 import credentials as user_credentials
     from google.oauth2 import service_account
     from googleapiclient.discovery import build
     from googleapiclient.errors import HttpError
     from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
 except ImportError:  # pragma: no cover - the ImportError path is unit tested
     service_account = None  # type: ignore[assignment]
+    user_credentials = None  # type: ignore[assignment]
     build = None  # type: ignore[assignment]
     MediaIoBaseDownload = None  # type: ignore[assignment]
     MediaIoBaseUpload = None  # type: ignore[assignment]
@@ -98,6 +112,71 @@ QUOTA_REASONS = frozenset(
 _METADATA_FIELDS = "id,name,mimeType,webViewLink,webContentLink"
 
 
+# Fields ``from_service_account_info`` actually needs, so a truncated or
+# pasted-with-quotes key fails with an actionable message rather than deep
+# inside the SDK.
+SERVICE_ACCOUNT_FIELDS = ("client_email", "private_key", "token_uri")
+
+# Fields ``from_authorized_user_info`` needs: the OAuth client pair plus the
+# long-lived token minted by the consent flow.
+OAUTH_USER_FIELDS = ("client_id", "client_secret", "refresh_token", "token_uri")
+
+
+def _read_credential_source(
+    credentials_file: str | None, credentials_json: str | None, file_var: str, json_var: str
+) -> str:
+    """Resolves the one-of(file, raw JSON) credential source to raw text.
+
+    Both credential identities accept the same two shapes, so the exclusivity
+    check, the path expansion and the "a path was pasted into the JSON
+    variable" tolerance live here rather than being written twice.
+    """
+    if credentials_file and credentials_json:
+        raise ValueError(f"{file_var} and {json_var} are mutually exclusive; configure exactly one.")
+    if not credentials_file and not credentials_json:
+        raise ValueError(f"set {file_var} to the downloaded JSON path, or {json_var} to its raw contents.")
+
+    if credentials_file:
+        path = Path(os.path.expanduser(credentials_file))
+        if not path.is_file():
+            raise ValueError(f"{file_var} does not exist: {path}")
+        return path.read_text(encoding="utf-8")
+
+    assert credentials_json is not None
+    raw = credentials_json.strip()
+    # Tolerate a path pasted into the raw-JSON variable by mistake.
+    if raw.startswith("/") and raw.endswith(".json") and Path(raw).is_file():
+        raw = Path(raw).read_text(encoding="utf-8")
+    return raw
+
+
+def _load_json_object(raw: str, kind: str) -> dict[str, Any]:
+    """Parses credential text into a dict, reporting both failure modes."""
+    try:
+        info = json.loads(raw)
+    except ValueError as err:
+        raise ValueError(f"Google Drive {kind} is not valid JSON: {err}") from err
+    if not isinstance(info, dict):
+        raise ValueError(f"Google Drive {kind} must be a JSON object, not a list or string.")
+    return info
+
+
+def _require_fields(info: dict[str, Any], fields: Sequence[str], remedy: str) -> None:
+    """Rejects a credential blob missing any field the SDK constructor reads."""
+    missing = [field for field in fields if not info.get(field)]
+    if missing:
+        raise ValueError(
+            f"Google Drive {kind_label(info)} is missing required field(s): "
+            + ", ".join(missing)
+            + f". {remedy}"
+        )
+
+
+def kind_label(info: dict[str, Any]) -> str:
+    """Human label for a credential blob, used in error messages."""
+    return "user OAuth token" if info.get("type") == "authorized_user" else "service account key"
+
+
 def parse_credentials(credentials_file: str | None, credentials_json: str | None) -> dict[str, Any]:
     """Loads the service account key from a path or from raw JSON contents.
 
@@ -106,51 +185,78 @@ def parse_credentials(credentials_file: str | None, credentials_json: str | None
     the fields ``from_service_account_info`` actually needs so a truncated or
     pasted-with-quotes key fails here with an actionable message.
     """
-    if credentials_file and credentials_json:
+    raw = _read_credential_source(
+        credentials_file,
+        credentials_json,
+        "GDRIVE_SERVICE_ACCOUNT_FILE",
+        "GDRIVE_SERVICE_ACCOUNT_JSON",
+    )
+    info = _load_json_object(raw, "service account key")
+    if info.get("type") and info["type"] != "service_account":
         raise ValueError(
-            "GDRIVE_SERVICE_ACCOUNT_FILE and GDRIVE_SERVICE_ACCOUNT_JSON are mutually "
-            "exclusive; configure exactly one."
+            f"GDRIVE_SERVICE_ACCOUNT_JSON must be a service_account key (got type={info['type']!r}). "
+            "Use GDRIVE_OAUTH_CREDENTIALS_FILE for a user OAuth token instead."
         )
-    if not credentials_file and not credentials_json:
-        raise ValueError(
-            "Google Drive needs a service account key: set GDRIVE_SERVICE_ACCOUNT_FILE "
-            "to the downloaded JSON path, or GDRIVE_SERVICE_ACCOUNT_JSON to its raw contents."
-        )
-
-    if credentials_file:
-        path = Path(os.path.expanduser(credentials_file))
-        if not path.is_file():
-            raise ValueError(f"GDRIVE_SERVICE_ACCOUNT_FILE does not exist: {path}")
-        raw = path.read_text(encoding="utf-8")
-    else:
-        assert credentials_json is not None
-        raw = credentials_json.strip()
-        # Tolerate a path pasted into the raw-JSON variable by mistake.
-        if raw.startswith("/") and raw.endswith(".json") and Path(raw).is_file():
-            raw = Path(raw).read_text(encoding="utf-8")
-
-    try:
-        info = json.loads(raw)
-    except ValueError as err:
-        raise ValueError(f"Service account key is not valid JSON: {err}") from err
-    if not isinstance(info, dict):
-        raise ValueError("Service account key must be a JSON object, not a list or string.")
-
-    key_type = info.get("type")
-    if key_type and key_type != "service_account":
-        raise ValueError(
-            f"GDRIVE_SERVICE_ACCOUNT_JSON must be a service_account key (got type={key_type!r}). "
-            "OAuth 'authorized_user' client secrets are not supported."
-        )
-    missing = [field for field in ("client_email", "private_key", "token_uri") if not info.get(field)]
-    if missing:
-        raise ValueError(
-            "Service account key is missing required field(s): "
-            + ", ".join(missing)
-            + ". Download a fresh JSON key from Google Cloud Console > IAM & Admin > "
-            "Service Accounts > Keys."
-        )
+    _require_fields(
+        info,
+        SERVICE_ACCOUNT_FIELDS,
+        "Download a fresh JSON key from Google Cloud Console > IAM & Admin > "
+        "Service Accounts > Keys.",
+    )
     return info
+
+
+def parse_oauth_credentials(
+    credentials_file: str | None, credentials_json: str | None
+) -> dict[str, Any]:
+    """Loads a user OAuth token (``type: authorized_user``) from path or raw JSON.
+
+    This is the blob ``google-auth`` writes after a one-time consent flow. It
+    carries ``client_id``/``client_secret``/``refresh_token`` instead of a
+    private key, and — unlike a service account — the consenting user owns
+    whatever is uploaded, so the write carries their storage quota.
+    """
+    raw = _read_credential_source(
+        credentials_file,
+        credentials_json,
+        "GDRIVE_OAUTH_CREDENTIALS_FILE",
+        "GDRIVE_OAUTH_CREDENTIALS_JSON",
+    )
+    info = _load_json_object(raw, "user OAuth token")
+    if info.get("type") != "authorized_user":
+        raise ValueError(
+            f"GDRIVE_OAUTH_CREDENTIALS_JSON must be an authorized_user token "
+            f"(got type={info.get('type')!r}). Use GDRIVE_SERVICE_ACCOUNT_FILE for a "
+            "service account key instead."
+        )
+    _require_fields(
+        info,
+        OAUTH_USER_FIELDS,
+        "Re-run the consent flow (scripts/gdrive_oauth_login.py) to mint a fresh token.",
+    )
+    return info
+
+
+def build_credentials(info: dict[str, Any], scopes: Sequence[str]):
+    """Builds the SDK credential object for whichever identity ``info`` describes.
+
+    Dispatches on ``type`` rather than on which variable was configured, so the
+    two front doors cannot disagree about what a blob is.
+    """
+    if info.get("type") == "authorized_user":
+        if user_credentials is None:  # pragma: no cover - guarded in __init__
+            raise ImportError(
+                "google-auth is required for Google Drive user OAuth. Install with: "
+                'pip install "footage-engine[gdrive]"'
+            )
+        return user_credentials.Credentials.from_authorized_user_info(info, scopes=list(scopes))
+
+    if service_account is None:  # pragma: no cover - guarded in __init__
+        raise ImportError(
+            "google-api-python-client and google-auth are required for "
+            "GoogleDriveStorageBackend. Install with: pip install \"footage-engine[gdrive]\""
+        )
+    return service_account.Credentials.from_service_account_info(info, scopes=list(scopes))
 
 
 def http_status(err: Exception) -> int:
@@ -267,33 +373,58 @@ class GoogleDriveStorageBackend:
         self,
         credentials_file: str | None = None,
         credentials_json: str | None = None,
+        oauth_credentials_file: str | None = None,
+        oauth_credentials_json: str | None = None,
         folder_id: str | None = None,
         drive_id: str | None = None,
         scopes: str | Sequence[str] | None = None,
         url_template: str | None = None,
         cache_dir: str | None = None,
     ):
-        info = parse_credentials(credentials_file, credentials_json)
+        # Exactly one identity across both families: a service account key and a
+        # user OAuth token are both "credentials", so accepting both at once
+        # would leave which one wins up to the dispatch on ``type``.
+        configured = [
+            name
+            for name, present in (
+                ("service account", credentials_file or credentials_json),
+                ("user OAuth", oauth_credentials_file or oauth_credentials_json),
+            )
+            if present
+        ]
+        if len(configured) != 1:
+            raise ValueError(
+                "Google Drive needs exactly one credential identity — a service account "
+                "(GDRIVE_SERVICE_ACCOUNT_FILE/JSON) or a user OAuth token "
+                f"(GDRIVE_OAUTH_CREDENTIALS_FILE/JSON); got {len(configured)} "
+                f"({', '.join(configured) or 'none'})."
+            )
         if not (folder_id or drive_id):
             raise ValueError(
                 "Google Drive needs a destination: set GDRIVE_FOLDER_ID to a folder shared "
                 "with the service account's client_email, or GDRIVE_DRIVE_ID to a Shared Drive "
                 "the service account has been added to."
             )
-        if service_account is None or build is None:
+        if build is None:
             raise ImportError(
                 "google-api-python-client and google-auth are required for "
                 "GoogleDriveStorageBackend. Install with: pip install \"footage-engine[gdrive]\""
             )
 
+        if oauth_credentials_file or oauth_credentials_json:
+            info = parse_oauth_credentials(oauth_credentials_file, oauth_credentials_json)
+        else:
+            info = parse_credentials(credentials_file, credentials_json)
+
         self.folder_id = folder_id
         self.drive_id = drive_id
         self.scopes = split_scopes(scopes)
         self.url_template = url_template or "https://drive.google.com/uc?export=download&id={file_id}"
+        # Which identity is in play — decides whether the anyone-reader grant on
+        # upload can succeed and where the bytes are billed.
+        self.identity = "user_oauth" if info.get("type") == "authorized_user" else "service_account"
 
-        credentials = service_account.Credentials.from_service_account_info(
-            info, scopes=list(self.scopes)
-        )
+        credentials = build_credentials(info, self.scopes)
         self.service = build(
             "drive", "v3", credentials=credentials, cache_discovery=False
         )
@@ -453,11 +584,16 @@ class GoogleDriveStorageBackend:
         download endpoint, which is fine for browsers but not something to hang
         byte-exact reads on (and it is the only way to read a file the public
         grant was refused for).
+
+        Uses ``get_media`` rather than ``get(alt="media")``: the discovery
+        default for ``files().get`` wins over an ``alt`` keyword, so the request
+        goes out as ``alt=json`` and the "download" silently streams file
+        *metadata* instead of bytes. ``get_media`` sets the parameter itself.
         """
         if MediaIoBaseDownload is None:  # pragma: no cover - guarded in __init__
             raise ImportError("google-api-python-client is required for downloads.")
-        request = self.service.files().get(
-            fileId=file_id, alt="media", supportsAllDrives=True
+        request = self.service.files().get_media(
+            fileId=file_id, supportsAllDrives=True
         )
         downloader = MediaIoBaseDownload(destination, request, chunksize=DOWNLOAD_CHUNK_SIZE)
         done = False
@@ -556,14 +692,18 @@ __all__ = [
     "DEFAULT_SCOPES",
     "DOWNLOAD_CHUNK_SIZE",
     "MAX_BACKOFF_SEC",
+    "OAUTH_USER_FIELDS",
     "QUOTA_REASONS",
+    "SERVICE_ACCOUNT_FIELDS",
     "UPLOAD_CHUNK_SIZE",
     "GoogleDriveStorageBackend",
     "backoff_seconds",
+    "build_credentials",
     "error_reason",
     "guess_content_type",
     "http_status",
     "parse_credentials",
+    "parse_oauth_credentials",
     "safe_cache_name",
     "split_scopes",
 ]

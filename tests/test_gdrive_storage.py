@@ -19,8 +19,10 @@ from footage_engine.storage.gdrive import (
     MAX_BACKOFF_SEC,
     GoogleDriveStorageBackend,
     backoff_seconds,
+    build_credentials,
     guess_content_type,
     parse_credentials,
+    parse_oauth_credentials,
     safe_cache_name,
     split_scopes,
 )
@@ -34,6 +36,19 @@ KEY_JSON = json.dumps(
         "client_email": "footage-engine@demo.iam.gserviceaccount.com",
         "client_id": "12345",
         "token_uri": "https://oauth2.googleapis.com/token",
+    }
+)
+
+# What the consent flow in scripts/gdrive_oauth_login.py writes: no private key,
+# a refresh token standing in for one.
+OAUTH_JSON = json.dumps(
+    {
+        "type": "authorized_user",
+        "client_id": "client-id.apps.googleusercontent.com",
+        "client_secret": "client-secret",
+        "refresh_token": "1//refresh-token",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "scopes": ["https://www.googleapis.com/auth/drive"],
     }
 )
 
@@ -142,6 +157,20 @@ class FakeFiles:
             return SimpleNamespace(body=self.content.get(file_id, b""))
         return FakeRequest(result={"id": file_id, "name": self.names.get(file_id, "clip.mp4")})
 
+    def get_media(self, **kwargs):
+        """Mirrors the real client: this, not ``get(alt="media")``, fetches bytes.
+
+        ``get(alt="media")`` silently degrades to ``alt=json`` in
+        google-api-python-client 2.x, which streams metadata where content was
+        expected. Modelling the two as different methods is what lets the test
+        below assert the backend stopped relying on the broken spelling.
+        """
+        self.gets.append(kwargs)
+        file_id = kwargs.get("fileId")
+        if file_id in self.missing:
+            return FakeRequest(error=FakeHttpError(404, "notFound"))
+        return SimpleNamespace(body=self.content.get(file_id, b""))
+
     def delete(self, **kwargs):
         self.deletes.append(kwargs)
         file_id = kwargs.get("fileId")
@@ -193,8 +222,22 @@ def sdk(monkeypatch):
         def from_service_account_info(info, scopes=None):
             return {"client_email": info["client_email"], "scopes": tuple(scopes or ())}
 
+    class FakeUserCredentials:
+        @staticmethod
+        def from_authorized_user_info(info, scopes=None):
+            return {
+                "refresh_token": info["refresh_token"],
+                "client_id": info["client_id"],
+                "scopes": tuple(scopes or ()),
+            }
+
     monkeypatch.setattr(gdrive_backend, "build", fake_build)
-    monkeypatch.setattr(gdrive_backend, "service_account", SimpleNamespace(Credentials=FakeCredentials))
+    monkeypatch.setattr(
+        gdrive_backend, "service_account", SimpleNamespace(Credentials=FakeCredentials)
+    )
+    monkeypatch.setattr(
+        gdrive_backend, "user_credentials", SimpleNamespace(Credentials=FakeUserCredentials)
+    )
     monkeypatch.setattr(gdrive_backend, "HttpError", FakeHttpError)
     monkeypatch.setattr(gdrive_backend, "MediaIoBaseUpload", FakeUpload)
     monkeypatch.setattr(gdrive_backend, "MediaIoBaseDownload", FakeDownloader)
@@ -235,9 +278,10 @@ def test_key_missing_required_fields_points_at_console_download():
         parse_credentials(None, json.dumps({"client_email": "a@b.iam.gserviceaccount.com"}))
 
 
-def test_oauth_user_client_secret_is_rejected():
-    with pytest.raises(ValueError, match="service_account"):
-        parse_credentials(None, json.dumps({"type": "authorized_user"}))
+def test_service_account_slot_redirects_an_oauth_token_to_the_oauth_variable():
+    """The two families stay separate: no silent cross-acceptance."""
+    with pytest.raises(ValueError, match="GDRIVE_OAUTH_CREDENTIALS_FILE"):
+        parse_credentials(None, OAUTH_JSON)
 
 
 def test_key_file_is_read_from_disk(tmp_path):
@@ -250,6 +294,84 @@ def test_key_file_is_read_from_disk(tmp_path):
 def test_nonexistent_key_file_is_actionable(tmp_path):
     with pytest.raises(ValueError, match="does not exist"):
         parse_credentials(str(tmp_path / "nope.json"), None)
+
+
+# -- user oauth credentials ------------------------------------------------------
+
+
+def test_missing_oauth_names_the_oauth_variables():
+    with pytest.raises(ValueError, match="GDRIVE_OAUTH_CREDENTIALS_FILE"):
+        parse_oauth_credentials(None, None)
+
+
+def test_oauth_file_and_json_sources_are_mutually_exclusive():
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        parse_oauth_credentials("/tmp/token.json", OAUTH_JSON)
+
+
+def test_oauth_token_without_a_refresh_token_is_rejected():
+    """A token missing refresh_token cannot refresh; fail at load, not mid-upload."""
+    broken = json.dumps({"type": "authorized_user", "client_id": "c", "client_secret": "s"})
+    with pytest.raises(ValueError, match="refresh_token"):
+        parse_oauth_credentials(None, broken)
+
+
+def test_oauth_slot_rejects_a_service_account_key():
+    with pytest.raises(ValueError, match="GDRIVE_SERVICE_ACCOUNT_FILE"):
+        parse_oauth_credentials(None, KEY_JSON)
+
+
+def test_oauth_token_is_read_from_disk(tmp_path):
+    token_path = tmp_path / "token.json"
+    token_path.write_text(OAUTH_JSON, encoding="utf-8")
+    info = parse_oauth_credentials(str(token_path), None)
+    assert info["refresh_token"] == "1//refresh-token"
+
+
+def test_build_credentials_dispatches_on_type_not_on_the_configured_variable(sdk):
+    """Both identities reach the SDK through one builder, keyed off ``type``."""
+    from_info = parse_credentials(None, KEY_JSON)
+    oauth_info = parse_oauth_credentials(None, OAUTH_JSON)
+
+    sa_creds = build_credentials(from_info, ["https://www.googleapis.com/auth/drive"])
+    oauth_creds = build_credentials(oauth_info, ["https://www.googleapis.com/auth/drive"])
+
+    assert sa_creds["client_email"] == "footage-engine@demo.iam.gserviceaccount.com"
+    assert oauth_creds["refresh_token"] == "1//refresh-token"
+    assert oauth_creds["scopes"] == ("https://www.googleapis.com/auth/drive",)
+
+
+def test_backend_accepts_a_user_oauth_token(sdk):
+    backend = make_backend(credentials_json=None, oauth_credentials_json=OAUTH_JSON)
+    assert backend.identity == "user_oauth"
+    call = sdk.build_calls[0]
+    assert call["api"] == "drive"
+    assert call["credentials"]["refresh_token"] == "1//refresh-token"
+
+
+def test_backend_records_a_service_account_identity(sdk):
+    assert make_backend().identity == "service_account"
+
+
+def test_backend_rejects_two_identities_at_once(sdk):
+    with pytest.raises(ValueError, match="exactly one credential identity"):
+        make_backend(oauth_credentials_json=OAUTH_JSON)
+
+
+def test_backend_rejects_no_identity_at_all(sdk):
+    with pytest.raises(ValueError, match="exactly one credential identity"):
+        make_backend(credentials_json=None)
+
+
+def test_upload_uses_the_same_wire_contract_under_user_oauth(sdk):
+    """Identity changes who owns the file, not how the upload is shaped."""
+    backend = make_backend(credentials_json=None, oauth_credentials_json=OAUTH_JSON)
+    file_id = backend.save_file(b"bytes", "clip.mp4")
+    created = sdk.service.files_resource.creates[-1]
+    assert created["body"]["name"] == "clip.mp4"
+    assert created["body"]["parents"] == ["folder_1"]
+    assert created["supportsAllDrives"] is True
+    assert sdk.service.permissions_resource.grants[-1]["fileId"] == file_id
 
 
 def test_destination_is_required_even_with_credentials():
@@ -394,8 +516,27 @@ def test_get_file_streams_bytes_over_authenticated_media_download(sdk):
 
     assert data == b"z" * 4096
     media_request = sdk.service.files_resource.gets[0]
-    assert media_request["alt"] == "media"
     assert media_request["supportsAllDrives"] is True
+
+
+def test_download_uses_get_media_not_get_alt_media(sdk):
+    """Regression: ``get(alt="media")`` degrades to ``alt=json`` in client 2.x.
+
+    The discovery default wins over the ``alt`` keyword, so the old call
+    returned the request URI as ``.../files/<id>?alt=json`` and streamed file
+    *metadata* into the destination. The fake returns metadata for a bare
+    ``get()``, so this fails if the backend regresses to the broken spelling.
+    """
+    sdk.service.files_resource.content["file_abc123"] = b"real-bytes"
+    backend = make_backend(cache_dir=None)
+
+    # A bare get() would hand back JSON metadata here, not these bytes.
+    assert backend.get_file("file_abc123") == b"real-bytes"
+
+    sdk.service.files_resource.gets.clear()
+    backend.get_local_path("file_abc123")
+    # get_media passes no `alt`; it sets the media parameter itself.
+    assert all("alt" not in kwargs for kwargs in sdk.service.files_resource.gets)
 
 
 def test_get_local_path_caches_under_a_name_with_the_metadata_extension(sdk, tmp_path):
@@ -410,7 +551,8 @@ def test_get_local_path_caches_under_a_name_with_the_metadata_extension(sdk, tmp
     assert not list(tmp_path.glob("*.tmp")), "partial downloads must not survive"
 
     # Second call must be a pure cache hit: no new metadata round trips.
-    metadata_calls = [g for g in sdk.service.files_resource.gets if "alt" not in g]
+    # `fields` marks the metadata-only probe; the media download sends none.
+    metadata_calls = [g for g in sdk.service.files_resource.gets if "fields" in g]
     assert len(metadata_calls) == 1
     assert backend.get_local_path("file_abc123") == local_path
 

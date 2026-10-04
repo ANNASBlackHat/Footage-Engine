@@ -45,10 +45,19 @@ def get_storage_backend(settings: Settings | None = None) -> StorageBackend:
             folder=cfg.CLOUDINARY_FOLDER,
         )
     elif cfg.STORAGE_BACKEND == "gdrive":
-        if not (cfg.GDRIVE_SERVICE_ACCOUNT_FILE or cfg.GDRIVE_SERVICE_ACCOUNT_JSON):
+        service_account_configured = bool(
+            cfg.GDRIVE_SERVICE_ACCOUNT_FILE or cfg.GDRIVE_SERVICE_ACCOUNT_JSON
+        )
+        oauth_configured = bool(
+            cfg.GDRIVE_OAUTH_CREDENTIALS_FILE or cfg.GDRIVE_OAUTH_CREDENTIALS_JSON
+        )
+        if service_account_configured == oauth_configured:
+            # Equal covers both "neither" and "both": one identity is required.
             raise ValueError(
-                "GDRIVE_SERVICE_ACCOUNT_FILE or GDRIVE_SERVICE_ACCOUNT_JSON must be "
-                "configured (exactly one)."
+                "Configure exactly one Google Drive credential identity — either "
+                "GDRIVE_SERVICE_ACCOUNT_FILE/JSON (service account, Shared Drives only) "
+                "or GDRIVE_OAUTH_CREDENTIALS_FILE/JSON (user OAuth, owns the files and "
+                f"uses that account's quota); {'both were set' if oauth_configured else 'neither was set'}."
             )
         if not (cfg.GDRIVE_FOLDER_ID or cfg.GDRIVE_DRIVE_ID):
             raise ValueError(
@@ -59,6 +68,8 @@ def get_storage_backend(settings: Settings | None = None) -> StorageBackend:
         backend = GoogleDriveStorageBackend(
             credentials_file=cfg.GDRIVE_SERVICE_ACCOUNT_FILE,
             credentials_json=cfg.GDRIVE_SERVICE_ACCOUNT_JSON,
+            oauth_credentials_file=cfg.GDRIVE_OAUTH_CREDENTIALS_FILE,
+            oauth_credentials_json=cfg.GDRIVE_OAUTH_CREDENTIALS_JSON,
             folder_id=cfg.GDRIVE_FOLDER_ID,
             drive_id=cfg.GDRIVE_DRIVE_ID,
             scopes=split_scopes(cfg.GDRIVE_SCOPES),

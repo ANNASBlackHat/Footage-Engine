@@ -37,7 +37,7 @@ footage-engine/
 │   ├── pipeline/          # Resumable batch processor for pending media items
 │   ├── retrieval/         # Vector search, hybrid filtering, and fine localization
 │   ├── sources/           # Stock media providers (Pexels, Pixabay, Coverr, Direct)
-│   ├── storage/           # Storage backends (Local filesystem, ImageKit, Cloudinary)
+│   ├── storage/           # Storage backends (Local filesystem, ImageKit, Cloudinary, Google Drive)
 │   ├── vector/            # Vector store clients (Zilliz Cloud, In-Memory)
 │   ├── worker/            # Async job queue + worker (queue-driven footage search)
 │   ├── config.py          # Environment settings loaded via Pydantic
@@ -125,12 +125,14 @@ Configure your `.env` file according to the options defined in `.env.example` / 
 | `CLOUDINARY_API_KEY` | string | Cloudinary API key |
 | `CLOUDINARY_API_SECRET` | string | Cloudinary API secret |
 | `CLOUDINARY_FOLDER` | `footage_engine/raw` | Cloudinary folder that uploads are rooted at |
-| `GDRIVE_SERVICE_ACCOUNT_FILE` | string | Path to the Google service account JSON key (requires the `gdrive` extra); mutually exclusive with `GDRIVE_SERVICE_ACCOUNT_JSON` |
+| `GDRIVE_SERVICE_ACCOUNT_FILE` | string | Path to the Google service account JSON key (requires the `gdrive` extra). Mutually exclusive with the other three |
 | `GDRIVE_SERVICE_ACCOUNT_JSON` | string | Raw contents of the Google service account JSON key (for env-only deployments) |
-| `GDRIVE_FOLDER_ID` | string | Drive folder shared with the service account's `client_email` |
-| `GDRIVE_DRIVE_ID` | string | Shared Drive id the service account was added to (files land at its root when no folder is set) |
-| `GDRIVE_SCOPES` | `https://www.googleapis.com/auth/drive` | Comma-separated OAuth scopes; must stay the full `drive` scope to see files shared *to* the service account |
-| `GDRIVE_URL_TEMPLATE` | `https://drive.google.com/uc?export=download&id={file_id}` | Public download link template returned by `get_url` |
+| `GDRIVE_OAUTH_CREDENTIALS_FILE` | string | Path to a user OAuth token from `scripts/gdrive_oauth_login.py`. **Use this for ordinary Drive folders** — a service account cannot write to one |
+| `GDRIVE_OAUTH_CREDENTIALS_JSON` | string | Same token as raw JSON |
+| `GDRIVE_FOLDER_ID` | string | Destination folder. Under a service account it must be shared with the key's `client_email`; under user OAuth it must be one the consenting user can write to |
+| `GDRIVE_DRIVE_ID` | string | Shared Drive id the identity was added to (files land at its root when no folder is set) |
+| `GDRIVE_SCOPES` | `https://www.googleapis.com/auth/drive` | Comma-separated OAuth scopes; must stay the full `drive` scope to see files not created by this app. An OAuth refresh token is bound to the scopes granted at consent — changing this requires re-running the consent flow |
+| `GDRIVE_URL_TEMPLATE` | `https://drive.google.com/uc?export=download&id={file_id}` | Public download link template returned by `get_url`. Switch to `https://lh3.googleusercontent.com/d/{file_id}` for large assets, where `uc?export=download` inserts a virus-scan interstitial |
 | **Vector Store** | | |
 | `VECTOR_STORE` | `in_memory` / `zilliz` | Vector store backend (defaults to fast in-memory store if empty) |
 | `ZILLIZ_URI` | string | Zilliz Cloud / Milvus cluster URI |
@@ -348,6 +350,75 @@ uv run footage-engine-mcp --transport sse --host 0.0.0.0 --port 8000
 | **Resource** | `footage://chunks/{chunk_id}` | JSON payload of chunk metadata and stream URL. |
 | **Resource** | `footage://stats` | Live library statistics. |
 | **Prompt** | `broll-match-beat` | Directorial prompt translating narration text into optimal visual search queries. |
+
+---
+
+## YouTube ingestion (download requirements)
+
+`scripts/ingest_youtube_video.py` needs more than the base dependencies. YouTube
+serves media only to clients it trusts, and since 2025 that means solving a
+JavaScript challenge with a real runtime. **All four of these are required:**
+
+```bash
+# 1. A JS runtime. yt-dlp only enables deno by default; node alone is refused.
+curl -fsSL https://deno.land/install.sh | sh    # installs ~/.deno/bin/deno
+export PATH="$HOME/.deno/bin:$PATH"             # installer edits only its own shell
+
+# 2. The EJS challenge-solver components.
+uv pip install yt-dlp-ejs certifi
+
+# 3. Fresh cookies. Metadata fetches work anonymously; the media CDN does not.
+curl -sL "https://<your-endpoint>" -o /tmp/yt_cookie.txt && chmod 600 /tmp/yt_cookie.txt
+
+# 4. An up-to-date yt-dlp (this one is >90 days out of date otherwise).
+uv pip install -U yt-dlp
+```
+
+Then point the engine at the cookie file and run it:
+
+```bash
+YOUTUBE_COOKIES=/tmp/yt_cookie.txt \
+  uv run python scripts/ingest_youtube_video.py "https://www.youtube.com/watch?v=..." \
+  --entity "Aye-aye" --entity-type animal
+```
+
+### Diagnosing a failed download
+
+| Symptom | Cause |
+|---|---|
+| `HTTP Error 403: Forbidden` | No JS runtime, or `yt-dlp-ejs` not installed |
+| `n challenge solving failed` | Runtime installed but not on `PATH` |
+| `Only images are available for download` | Cookies missing/expired — the client is unauthenticated |
+| `The page needs to be reloaded` | Transient. YouTube throttles repeated extractions from one IP; retry, or pre-seed the cache |
+
+### Downloads are cached, and the cache is worth pre-seeding
+
+The downloaded video lands in `$TMPDIR/footage_engine_cache/youtube_<id>.mp4` and
+is reused by every later stage. When the download is flaky, fetch it once by hand
+into that exact path and the rest of the pipeline runs entirely offline:
+
+```bash
+CACHE="$TMPDIR/footage_engine_cache"; mkdir -p "$CACHE"
+yt-dlp --cookies /tmp/yt_cookie.txt --remote-components ejs:github \
+  -f "bestvideo[vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[vcodec!=av01]+bestaudio" \
+  -o "$CACHE/youtube_<VIDEO_ID>.mp4" "<URL>"
+```
+
+A cache entry is trusted when it is at least 1000 bytes, so a truncated download
+is silently re-fetched rather than parsed.
+
+### Format selection
+
+`YouTubeAdapter` prefers H.264 (`avc1`) over AV1 because software AV1 decode in
+OpenCV is slow and triggers `Failed to get pixel format`. It merges the best
+video-only stream with the best audio track, which needs `ffmpeg` on `PATH`.
+
+### Hardware note
+
+X-CLIP embedding is CPU-bound without a GPU, and a 14-minute 1080p video yields
+~220 chunks at the default 45 s threshold. On an Intel Mac that is tens of
+minutes. Use the [job worker](#async-job-worker-footage-search-as-a-queue) on
+Colab or Kaggle for anything large.
 
 ---
 
@@ -602,6 +673,26 @@ uv run pytest -v
 # Run specific test module
 uv run pytest tests/test_chunking.py
 ```
+
+---
+
+## Kaggle Kernels
+
+`kaggle/` holds notebooks that run on Kaggle's GPUs via the `kaggle` CLI rather
+than the web UI. `kaggle/yt_ingest/` clones this repo, rebuilds `.env` from
+Kaggle secrets, and ingests YouTube URLs into scene chunks.
+
+```bash
+uv pip install kaggle
+export KAGGLE_API_TOKEN=<token>        # or write it to ~/.kaggle/access_token
+kaggle kernels push -p kaggle/yt_ingest
+kaggle kernels status annasblackhat/footage-engine-yt-ingest
+```
+
+Secrets cannot be attached through the CLI — add them in the notebook UI under
+**Add-ons → Secrets**. The required set is tabulated in
+[`kaggle/README.md`](kaggle/README.md), along with the `DATABASE_URL` caveat
+(SQLite does not survive a Kaggle session) and the hardware note above.
 
 ---
 
