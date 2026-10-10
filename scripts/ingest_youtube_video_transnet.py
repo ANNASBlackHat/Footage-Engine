@@ -1,6 +1,7 @@
 """Ingest and process a single long YouTube video using TransNetV2 with fast parallel clipping."""
 
 import argparse
+import importlib.util
 import os
 from pathlib import Path
 import sys
@@ -26,6 +27,183 @@ from footage_engine.vector import get_vector_store
 # ImageKit free-plan per-video upload cap (paid plans are higher: Lite 300MB, Pro 2GB).
 # Source: https://imagekit.io/docs/api-reference/upload-file/upload-file (File size limit)
 IMAGEKIT_FREE_PLAN_VIDEO_LIMIT_MB = 100
+
+# ---------------------------------------------------------------------------
+# Telegram reporting
+#
+# Credentials come from whichever runtime we happen to be in, because the same
+# script runs locally, on Kaggle, and on Colab and each exposes secrets
+# differently. Resolution order is first-non-empty-wins:
+#   1. runtime secrets  (kaggle_secrets on Kaggle, google.colab.userdata on Colab)
+#   2. .env file in the repo root (hand-parsed, so no extra import is required)
+#   3. os.environ
+# If neither TELEGRAM_TOKEN nor TELEGRAM_CHAT_ID resolves, reporting is skipped.
+# ---------------------------------------------------------------------------
+
+_RUNTIME = None  # cached: "kaggle" | "colab" | None
+_DOTENV = None  # cached parsed .env dict
+
+
+def _detect_runtime():
+    """Identify the hosted runtime, if any. Kaggle wins over Colab."""
+    global _RUNTIME
+    if _RUNTIME is not None:
+        return _RUNTIME or None
+
+    def _has_module(name):
+        try:
+            return importlib.util.find_spec(name) is not None
+        except (ImportError, ValueError):
+            return False
+
+    if _has_module("kaggle_secrets") or os.path.isdir("/kaggle/working"):
+        _RUNTIME = "kaggle"
+    elif _has_module("google.colab") or os.path.isdir("/content"):
+        _RUNTIME = "colab"
+    else:
+        _RUNTIME = ""
+    return _RUNTIME or None
+
+
+def _load_dotenv():
+    """Parse repo_root/.env once into a dict. Missing file is not an error."""
+    global _DOTENV
+    if _DOTENV is not None:
+        return _DOTENV
+
+    values: dict[str, str] = {}
+    env_path = Path(repo_root) / ".env"
+    try:
+        with open(env_path, encoding="utf-8", errors="replace") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                if line.startswith("export "):
+                    line = line[len("export "):].strip()
+                key, _, value = line.partition("=")
+                value = value.strip().strip("'\"")
+                if key.strip() and value:
+                    values[key.strip()] = value
+    except OSError:
+        pass  # no .env here — fall through to os.environ
+
+    _DOTENV = values
+    return _DOTENV
+
+
+def _resolve_env(name: str):
+    """First non-empty value of `name` across runtime secrets, .env, os.environ."""
+    runtime = _detect_runtime()
+
+    if runtime == "kaggle":
+        try:
+            from kaggle_secrets import UserSecretClient
+
+            value = UserSecretClient().get_secret(name)
+            if value:
+                return value.strip()
+        except Exception:
+            pass  # secret not attached, or kaggle_secrets is a stub
+
+    elif runtime == "colab":
+        try:
+            # userdata.get raises SecretNotFoundError when unset or not granted.
+            from google.colab import userdata
+
+            value = userdata.get(name)
+            if value:
+                return value.strip()
+        except Exception:
+            pass
+
+    value = _load_dotenv().get(name)
+    if value:
+        return value
+
+    value = os.environ.get(name)
+    return value.strip() if value else None
+
+
+def _send_telegram(text: str) -> bool:
+    """Best-effort report to Telegram. Never raises; returns False on any problem."""
+    token = _resolve_env("TELEGRAM_TOKEN")
+    chat_id = _resolve_env("TELEGRAM_CHAT_ID")
+
+    if not token or not chat_id:
+        missing = [
+            k for k, v in (("TELEGRAM_TOKEN", token), ("TELEGRAM_CHAT_ID", chat_id)) if not v
+        ]
+        print(f"  ℹ️ Telegram report skipped (not set: {', '.join(missing)}).", flush=True)
+        return False
+
+    masked = f"{token[:8]}…" if len(token) > 8 else "***"
+    try:
+        import requests
+
+        resp = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+            timeout=15,
+        )
+        if resp.ok:
+            print("  📤 Telegram report sent.", flush=True)
+            return True
+        print(f"  ⚠️ Telegram send failed (HTTP {resp.status_code}): {resp.text[:200]}", flush=True)
+    except Exception as err:
+        print(f"  ⚠️ Telegram send failed ({type(err).__name__}: {err}) [token {masked}]", flush=True)
+    return False
+
+
+def _item_line(summary: dict) -> str:
+    bits = []
+    if summary.get("item_id"):
+        bits.append(f"🆔 {summary['item_id'][:8]}")
+    if summary.get("duration"):
+        bits.append(f"⏳ {summary['duration']:.1f}s")
+    return " · ".join(bits) or "🆔 -"
+
+
+def _esc(text: str) -> str:
+    """Minimal HTML escape for the HTML parse_mode message body."""
+    return (
+        str(text)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
+def _format_report(summary: dict) -> str:
+    """Build a compact HTML message from the run summary."""
+    status = summary.get("status")
+    title = summary.get("title") or "Untitled"
+
+    if status == "skipped":
+        return f"✅ <b>Already indexed</b>\n{_item_line(summary)}"
+
+    # YouTube titles routinely contain & < >, which would abort an HTML parse.
+    title = _esc(title)
+    error = _esc(summary.get("error", ""))
+
+    icon = "✅" if status == "success" else "❌"
+    lines = [f"{icon} <b>{title}</b>", _item_line(summary)]
+
+    if summary.get("chunks"):
+        lines.append(
+            f"🎞 {summary['chunks']} chunk(s) · {summary.get('uploaded', 0)} uploaded "
+            f"· {summary.get('upload_failed', 0)} failed"
+        )
+    if summary.get("qwen"):
+        lines.append("🧠 Qwen embeddings: on")
+    if summary.get("elapsed"):
+        lines.append(f"⏱ {summary['elapsed']:.1f}s")
+    lines.append(f"▶️ {summary.get('url', '')}")
+
+    if summary.get("error"):
+        lines.append(f"\n<pre>{error}</pre>")
+
+    return "\n".join(lines)
 
 
 def parse_args():
@@ -102,7 +280,25 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    summary: dict = {"url": args.url or "", "status": "failed"}
+
+    try:
+        _run(args, summary)
+    except Exception as err:
+        summary["status"] = "failed"
+        summary["error"] = f"{type(err).__name__}: {err}"[:900]
+        summary.setdefault("elapsed", time.time() - summary.get("_t0", time.time()))
+        print(f"\n❌ Ingestion failed: {type(err).__name__}: {err}", flush=True)
+        _send_telegram(_format_report(summary))
+        raise
+    else:
+        _send_telegram(_format_report(summary))
+
+
+def _run(args, summary: dict):
     url = args.url
+    summary["_t0"] = time.time()
 
     if args.cookies:
         os.environ["YOUTUBE_COOKIES"] = args.cookies
@@ -114,7 +310,11 @@ def main():
 
     if not url:
         print("Error: No URL or file path provided.")
+        summary["status"] = "failed"
+        summary["error"] = "No URL or file path provided."
         return
+
+    summary["url"] = url
 
     cfg = get_settings()
     init_db(cfg.DATABASE_URL)
@@ -173,6 +373,11 @@ def main():
     print(f"  ✓ Resolution   : {item.resolution or 'Probing on download'} ({item.orientation})", flush=True)
     print(f"  ✓ Status       : {item.status.value}", flush=True)
 
+    summary["item_id"] = item.id
+    summary["title"] = item.item_metadata.get("title", "Untitled")
+    summary["duration"] = item.duration_sec
+    summary["elapsed"] = time.time() - summary["_t0"]
+
     if item.status == fe.MediaStatus.DONE and not args.output_dir:
         with get_db_session(cfg.DATABASE_URL) as session:
             db_item = session.get(MediaItem, item.id)
@@ -186,6 +391,8 @@ def main():
         else:
             print(f"\n✨ This video has ALREADY been processed and indexed! (Found {len(item.chunks)} chunks in DB).", flush=True)
             print("You can search it immediately using: uv run python scripts/search_cli.py \"<your search query>\"")
+            summary["status"] = "skipped"
+            summary["chunks"] = len(item.chunks)
             return
 
     # Resolve local path
@@ -200,6 +407,8 @@ def main():
         db_item = session.get(MediaItem, item.id)
         if not db_item:
             print(f"Error: MediaItem {item.id} not found in DB.")
+            summary["status"] = "failed"
+            summary["error"] = f"MediaItem {item.id} not found in DB."
             return
 
         chunks = db_item.chunks
@@ -225,6 +434,9 @@ def main():
             print(f"  ✓ Stored {len(chunks)} chunk records in database.", flush=True)
         else:
             print(f"  ✓ Found {len(chunks)} existing chunks in database.", flush=True)
+
+    summary["chunks"] = len(chunks)
+    summary["qwen"] = run_qwen
 
     # Step 3: Multi-threaded parallel clipping
     need_local_export = bool(args.output_dir)
@@ -348,6 +560,8 @@ def main():
                         f"{already_uploaded} previously uploaded, {failed_count} failed/skipped.",
                         flush=True,
                     )
+                    summary["uploaded"] = uploaded_count + already_uploaded
+                    summary["upload_failed"] = failed_count
 
         finally:
             # Cleanup temporary files if created for cloud-only upload
@@ -422,10 +636,16 @@ def main():
             print("You can now search inside this video with semantic queries:")
             print('  uv run python scripts/search_cli.py "describe any scene in the video"')
             print("=" * 80, flush=True)
+            summary["status"] = "success"
         else:
             print("\n❌ Embedding/indexing failed. Check logs above for details.", flush=True)
+            summary["status"] = "failed"
+            summary["error"] = "Embedding/indexing failed (see logs)."
     else:
         print("\n✨ Clipping complete. Vector indexing skipped as requested (--skip-index).")
+        summary["status"] = "success"
+
+    summary["elapsed"] = time.time() - summary["_t0"]
 
 
 if __name__ == "__main__":
