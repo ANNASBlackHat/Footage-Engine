@@ -21,7 +21,7 @@ from footage_engine.chunking.transnet_detector import (
 from footage_engine.config import get_settings
 from footage_engine.models.db import get_db_session, init_db
 from footage_engine.models.media import MediaItem, MediaStatus
-from footage_engine.storage import get_storage_backend
+from footage_engine.storage import get_storage_backend, to_stored_reference
 from footage_engine.vector import get_vector_store
 
 # ImageKit free-plan per-video upload cap (paid plans are higher: Lite 300MB, Pro 2GB).
@@ -531,7 +531,7 @@ def _run(args, summary: dict):
                                     flush=True,
                                 )
 
-                            saved_path = storage.save_file(chunk_bytes, chunk_filename)
+                            saved_path = to_stored_reference(storage, storage.save_file(chunk_bytes, chunk_filename))
                             chunk.storage_path = saved_path
                             session.commit()  # Incremental commit per chunk so progress is never lost
                             uploaded_count += 1

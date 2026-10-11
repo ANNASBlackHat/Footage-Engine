@@ -25,7 +25,7 @@ from footage_engine.sources.youtube import (
     is_youtube_url,
     normalize_youtube_url,
 )
-from footage_engine.storage import get_storage_backend
+from footage_engine.storage import get_storage_backend, to_stored_reference
 from footage_engine.storage.base import StorageBackend
 
 logger = logging.getLogger(__name__)
@@ -222,7 +222,7 @@ class Orchestrator:
                 f"{len(content) / (1024 * 1024):.2f} MB...",
                 flush=True,
             )
-            storage_path = self.storage.save_file(content, filename)
+            storage_path = to_stored_reference(self.storage, self.storage.save_file(content, filename))
             print(f"    Stored at: {storage_path}", flush=True)
 
         # 4. Insert media_item row (status=pending)

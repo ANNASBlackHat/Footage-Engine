@@ -11,6 +11,50 @@ _storage_instance: StorageBackend | None = None
 
 SUPPORTED_BACKENDS = ("local", "imagekit", "cloudinary", "gdrive")
 
+# Reference shapes that are already absolute and must never be prefixed with an
+# endpoint. Mirrors the passthrough each backend's ``get_url`` performs.
+ABSOLUTE_REF_PREFIXES = ("http://", "https://", "file://")
+
+
+KEY_BACKED_BACKENDS = (GoogleDriveStorageBackend, LocalStorageBackend)
+
+
+def to_stored_reference(backend: StorageBackend, key: str) -> str:
+    """Returns the most durable reference to store for a freshly-saved asset.
+
+    ``save_file`` returns a backend-owned key that is only meaningful to the
+    backend that issued it — and, for ImageKit and Cloudinary, to the *account*
+    that issued it. Rotating to a free-tier account on a different endpoint
+    makes every previously-stored key unreachable, with nothing in the row to
+    record which account wrote it. Storing the absolute URL pins the asset to
+    the endpoint that actually holds the bytes, so a later backend change can
+    still resolve it.
+
+    Two backends are deliberately left on their key:
+
+    ``GoogleDriveStorageBackend``
+        A Drive file id is already account-independent, and ``get_url`` returns
+        an unauthenticated ``uc?export=download`` link. Persisting that would
+        route every read through a plain HTTP download instead of the
+        authenticated ``MediaIoBaseDownload`` path, which is the only way to
+        read a file whose public grant was refused -- and it hits Drive's
+        virus-scan confirmation page past roughly 100 MB.
+
+    ``LocalStorageBackend``
+        The key is a path relative to ``LOCAL_STORAGE_DIR``, which stays valid
+        wherever the repo is checked out. An absolute ``file://`` would instead
+        bake the writing machine's filesystem layout into a shared database.
+
+    Reads of both shapes already work: ``resolve_remote_reference`` dispatches
+    absolute URLs (including YouTube and ``file://``) and returns ``None`` for
+    backend keys, and every backend calls it first in ``get_local_path``.
+    """
+    if not key or key.startswith(ABSOLUTE_REF_PREFIXES):
+        return key
+    if isinstance(backend, KEY_BACKED_BACKENDS):
+        return key
+    return backend.get_url(key)
+
 
 def get_storage_backend(settings: Settings | None = None) -> StorageBackend:
     """Builds the storage backend described by ``settings`` (default: app config).
@@ -98,5 +142,8 @@ __all__ = [
     "CloudinaryStorageBackend",
     "GoogleDriveStorageBackend",
     "SUPPORTED_BACKENDS",
+    "ABSOLUTE_REF_PREFIXES",
+    "KEY_BACKED_BACKENDS",
     "get_storage_backend",
+    "to_stored_reference",
 ]

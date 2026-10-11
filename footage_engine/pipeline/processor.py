@@ -13,7 +13,7 @@ from footage_engine.embeddings import backend_for, collection_name_for, get_embe
 from footage_engine.embeddings.base import EmbeddingBackend
 from footage_engine.models.db import get_db_session
 from footage_engine.models.media import Chunk, MediaItem, MediaStatus, MediaType
-from footage_engine.storage import get_storage_backend
+from footage_engine.storage import get_storage_backend, to_stored_reference
 from footage_engine.storage.base import StorageBackend
 from footage_engine.vector import get_vector_store
 from footage_engine.vector.base import VectorRecord, VectorStore
@@ -121,7 +121,7 @@ class BatchProcessor:
                                         f"({len(chunk_bytes) / (1024 * 1024):.2f} MB)...",
                                         flush=True,
                                     )
-                                    saved_path = self.storage.save_file(chunk_bytes, chunk_filename)
+                                    saved_path = to_stored_reference(self.storage, self.storage.save_file(chunk_bytes, chunk_filename))
                                     chunk.storage_path = saved_path
                                     logger.info(f"Uploaded physical chunk {chunk.id} to {saved_path}")
                             except Exception as ce:

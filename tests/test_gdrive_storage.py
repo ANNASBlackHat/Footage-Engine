@@ -490,6 +490,28 @@ def test_get_url_builds_the_public_download_link(sdk):
     )
 
 
+def test_stored_reference_keeps_the_bare_file_id(sdk):
+    """Drive rows store the file id, not the public download URL.
+
+    ``to_stored_reference`` would otherwise persist ``get_url``'s link, which
+    routes reads through an unauthenticated HTTP download instead of the
+    authenticated ``get_media`` path -- breaking private files, and hitting
+    Drive's virus-scan page past ~100 MB.
+    """
+    from footage_engine.storage import to_stored_reference
+
+    backend = make_backend(cache_dir=None)
+    file_id = "1AbCdEfGhIjKlMnOpQrStUvWxYz"
+
+    stored = to_stored_reference(backend, file_id)
+
+    assert stored == file_id
+    # Search results still get a usable link; only the stored value differs.
+    assert backend.get_url(stored) == (
+        f"https://drive.google.com/uc?export=download&id={file_id}"
+    )
+
+
 def test_get_url_passes_foreign_references_through(sdk):
     backend = make_backend(cache_dir=None)
     for reference in (
