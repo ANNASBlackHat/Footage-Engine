@@ -11,8 +11,9 @@ it -- the key shape is identical across accounts.
 
 This script answers that empirically: it probes each distinct stored path
 against every candidate account and reports which ones actually serve it.
-It is strictly read-only. There is no ``--apply``; rewriting rows is a
-separate, deliberate step driven by the CSV this produces.
+It is read-only by default -- rewriting rows needs an explicit ``--apply``,
+and even then only paths positively confirmed live are touched, with the
+original values backed up to CSV first.
 
 The database is sampled rather than dumped: a ``Chunk`` and the Qwen row
 backfilled from it share one ``storage_path`` (see scripts/backfill_qwen.py),
@@ -28,8 +29,20 @@ Usage:
     # 3. Probe everything and write the report.
     python scripts/audit_storage_refs.py --out storage_audit.csv
 
-ImageKit blocks datacenter IPs, so route through a proxy. requests picks up
-HTTPS_PROXY/HTTP_PROXY on its own; --proxy just takes precedence:
+    # 4. Rewrite the confirmed paths. Review the report first.
+    python scripts/audit_storage_refs.py --apply
+
+DNS hijacking
+-------------
+Some ISPs resolve imagekit.io to a captive-portal landing page that answers
+HTTP 200 for every path, including ones that cannot exist. Probing through
+such a resolver would mark every asset live and pin the table to a host
+serving zero bytes. Hosts are therefore resolved over DNS-over-HTTPS and the
+connection is pinned to the returned IP, with the real hostname kept for SNI
+so TLS still validates. A 200 that is not media is rejected outright.
+
+ImageKit also blocks datacenter IPs, so route through a proxy if needed.
+requests picks up HTTPS_PROXY/HTTP_PROXY on its own; --proxy takes precedence:
 
     python scripts/audit_storage_refs.py --sample 50 \\
         --proxy http://user:pass@host:port
@@ -170,6 +183,14 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--pin-dns", action=argparse.BooleanOptionalAction, default=True,
                     help="Resolve hosts over DoH and pin the IP (default: on). Needed when "
                          "your ISP hijacks imagekit.io to a landing page.")
+    ap.add_argument("--apply", action="store_true",
+                    help="REWRITE storage_path in the database for every path confirmed live. "
+                         "Without this flag the script never writes to Postgres.")
+    ap.add_argument("--apply-ambiguous", action="store_true",
+                    help="With --apply, also rewrite paths that matched more than one account "
+                         "(first match in probe order wins).")
+    ap.add_argument("--backup", default="storage_audit_backup.csv",
+                    help="Where --apply records the original values (default: storage_audit_backup.csv).")
     args, _unknown = ap.parse_known_args()  # tolerate kernel argv (e.g. Colab's -f flag)
     return args
 
@@ -513,6 +534,59 @@ def print_summary(verdicts: list[Verdict], rows_by_path: dict[str, int]) -> None
             print(f"      item {item_id:10} {count} path(s)")
 
 
+def apply_verdicts(database_url: str, verdicts: list[Verdict],
+                   allow_ambiguous: bool, backup_path: Optional[str]) -> int:
+    """Rewrite ``storage_path`` to the confirmed URL for every live path.
+
+    Only paths the probe positively confirmed are touched. Anything dead or
+    unreachable keeps its existing key, which still resolves through the
+    configured backend -- an unverified rewrite is worse than no rewrite.
+
+    The original values are written to a backup file first so a bad run can be
+    reversed, and the whole update runs in one transaction.
+    """
+    updates: dict[str, str] = {}
+    for v in verdicts:
+        if not v.chosen_url:
+            continue
+        if v.status == "ambiguous" and not allow_ambiguous:
+            continue
+        if v.status not in ("live", "ambiguous"):
+            continue
+        # Never rewrite something that is already absolute: it would only
+        # replace a good URL with an equivalent one.
+        if v.path.startswith(("http://", "https://", "file://")):
+            continue
+        updates[v.path] = v.chosen_url
+
+    if not updates:
+        print("\nNothing to apply: no path was confirmed live.")
+        return 0
+
+    if backup_path:
+        with open(backup_path, "w", newline="", encoding="utf-8") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(["old_storage_path", "new_storage_path"])
+            for old, new in sorted(updates.items()):
+                writer.writerow([old, new])
+        print(f"Backup of {len(updates)} original value(s) -> {backup_path}")
+
+    engine = get_engine(database_url)
+    total = 0
+    with engine.begin() as conn:
+        for old, new in sorted(updates.items()):
+            # chunks first, then media_items. Both carry keys the audit
+            # recorded, so a match on the exact string is safe in both tables.
+            for table in ("chunks", "media_items"):
+                result = conn.execute(
+                    text(f"UPDATE {table} SET storage_path = :new WHERE storage_path = :old"),
+                    {"new": new, "old": old},
+                )
+                total += result.rowcount or 0
+    print(f"Updated {total} row(s) across {len(updates)} path(s).")
+    return total
+
+
 def main() -> int:
     args = parse_args()
 
@@ -605,7 +679,22 @@ def main() -> int:
     write_csv(args.out, verdicts)
     print(f"\nWrote {args.out}")
     print_summary(verdicts, {s.path: s.row_count for s in selected})
-    print("\nRead-only run: no rows were modified.")
+
+    if not args.apply:
+        print("\nRead-only run: no rows were modified. "
+              "Re-run with --apply to rewrite the confirmed paths.")
+        return 0
+
+    skipped_ambiguous = sum(1 for v in verdicts if v.status == "ambiguous")
+    if skipped_ambiguous and not args.apply_ambiguous:
+        print(f"\nNote: {skipped_ambiguous} ambiguous path(s) matched more than one account "
+              "and were left untouched. Add --apply-ambiguous to include them.")
+    if args.dry_run:
+        print("\n--dry-run was set, so no rows were modified.")
+        return 0
+
+    print()
+    apply_verdicts(cfg.DATABASE_URL, verdicts, args.apply_ambiguous, args.backup)
     return 0
 
 
