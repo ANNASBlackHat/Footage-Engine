@@ -39,6 +39,7 @@ import argparse
 import csv
 import os
 import sys
+import subprocess
 import threading
 import time
 from collections import defaultdict
@@ -166,6 +167,9 @@ def parse_args() -> argparse.Namespace:
                     help="Retries for a rate-limited or transient failure (default: 2).")
     ap.add_argument("--only-shape", choices=(SHAPE_IMAGEKIT, SHAPE_CLOUDINARY, SHAPE_OTHER),
                     default=None, help="Probe only one path shape.")
+    ap.add_argument("--pin-dns", action=argparse.BooleanOptionalAction, default=True,
+                    help="Resolve hosts over DoH and pin the IP (default: on). Needed when "
+                         "your ISP hijacks imagekit.io to a landing page.")
     args, _unknown = ap.parse_known_args()  # tolerate kernel argv (e.g. Colab's -f flag)
     return args
 
@@ -213,14 +217,122 @@ def load_paths(database_url: str, only_shape: Optional[str]) -> list[StoredPath]
     return paths
 
 
+# -- DNS ------------------------------------------------------------------------
+# Some ISPs (and captive portals) hijack imagekit.io to a landing page instead
+# of the CDN. The hijack answers HTTP 200 for *every* path, including ones that
+# cannot exist, so probing through a poisoned resolver would mark every asset
+# live and pin the whole table to a domain that serves zero bytes.
+#
+# Resolution therefore goes over DNS-over-HTTPS, and the connection is pinned to
+# the returned IP with the real hostname kept for SNI and certificate
+# validation. TLS verification is never disabled -- a hostname mismatch means
+# something is intercepting, which is a result to report, not to bypass.
+
+DOH_RESOLVER = "https://cloudflare-dns.com/dns-query"
+DOH_FALLBACKS = (
+    "https://cloudflare-dns.com/dns-query",
+    "https://dns.google/resolve",
+)
+
+# Media the probe will accept as proof the asset exists. A landing page or
+# captive portal answers text/html, so this doubles as a hijack check.
+ACCEPTED_CONTENT_TYPES = ("video/", "image/", "audio/", "application/octet-stream")
+
+
+def resolve_via_doh(host: str, timeout: float) -> list[str]:
+    """A/AAAA addresses for ``host`` from a DoH resolver, bypassing local DNS.
+
+    Returns an empty list when every resolver fails, which callers treat as
+    "unreachable" rather than "does not exist".
+    """
+    for resolver in DOH_FALLBACKS:
+        try:
+            resp = requests.get(
+                resolver,
+                params={"name": host, "type": "A"},
+                headers={"accept": "application/dns-json"},
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+        except (requests.RequestException, ValueError):
+            continue
+
+        addresses = [
+            str(answer.get("data", "")).strip()
+            for answer in payload.get("Answer", []) or []
+            if int(answer.get("type", 0)) == 1 and answer.get("data")
+        ]
+        # Reject obvious interstitial hosts even if a resolver hands them back:
+        # a CDN answer is an IP, not a name.
+        addresses = [a for a in addresses if _is_ipv4(a)]
+        if addresses:
+            return addresses
+    return []
+
+
+def _is_ipv4(value: str) -> bool:
+    parts = value.split(".")
+    return len(parts) == 4 and all(p.isdigit() and 0 <= int(p) <= 255 for p in parts)
+
+
+class DnsPinner:
+    """Resolves candidate hosts once over DoH, then reuses the addresses.
+
+    SNI and Host both carry the real hostname, so TLS validates against the
+    genuine certificate even though the socket is aimed at a fixed IP. Cached
+    per host: one DoH lookup covers thousands of probes.
+
+    Implemented with curl's ``--resolve`` rather than requests, because
+    requests cannot "dial this IP but verify this hostname" on its own, and
+    the pinned form must still pass certificate validation.
+    """
+
+    def __init__(self, timeout: float, enabled: bool):
+        self.timeout = timeout
+        self.enabled = enabled
+        self._cache: dict[str, list[str]] = {}
+        self._lock = threading.Lock()
+
+    def addresses_for(self, host: str) -> list[str]:
+        if not self.enabled:
+            return []
+        with self._lock:
+            if host not in self._cache:
+                self._cache[host] = resolve_via_doh(host, self.timeout)
+            return self._cache[host]
+
+    def resolve_args(self, url: str) -> list[str]:
+        """curl ``--resolve`` args pinning this URL's host to each DoH address."""
+        if not self.enabled:
+            return []
+        parts = urlsplit(url)
+        host = parts.hostname
+        if not host:
+            return []
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+        args: list[str] = []
+        for address in self.addresses_for(host):
+            args += ["--resolve", f"{host}:{port}:{address}"]
+        return args
+
+
 # -- probing -------------------------------------------------------------------
 
 class Prober:
-    """Rate-limited, retrying HTTP client shared across worker threads."""
+    """Rate-limited, retrying HTTP client shared across worker threads.
 
-    def __init__(self, proxy: Optional[str], timeout: float, retries: int):
+    Uses curl with ``--resolve`` when DNS pinning is on (see DnsPinner), and
+    requests otherwise. Both paths verify TLS and both reject a 200 that is not
+    actually media, so a hijacked or captive-portal endpoint cannot register as
+    a successful hit.
+    """
+
+    def __init__(self, proxy: Optional[str], timeout: float, retries: int,
+                 pinner: Optional[DnsPinner] = None):
         self.timeout = timeout
         self.retries = retries
+        self.pinner = pinner
         self._lock = threading.Lock()
         self._last_request = 0.0
         self.session = requests.Session()
@@ -234,13 +346,62 @@ class Prober:
                 time.sleep(wait)
             self._last_request = time.monotonic()
 
+    @staticmethod
+    def _is_media(content_type: str) -> bool:
+        ctype = (content_type or "").lower()
+        return any(ctype.startswith(prefix) for prefix in ACCEPTED_CONTENT_TYPES)
+
+    def _probe_pinned(self, url: str) -> tuple[bool, int, str]:
+        """curl with a DoH-pinned IP; TLS still validates the real hostname."""
+        resolve_args = self.pinner.resolve_args(url)
+        if not resolve_args:
+            return False, 0, "DoH returned no address for this host"
+        cmd = [
+            "curl", "-sS", "-I", "--max-time", str(self.timeout),
+            "-o", "/dev/null", "-w", "%{http_code}|%{content_type}",
+            *resolve_args, url,
+        ]
+        try:
+            done = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout + 5)
+        except subprocess.TimeoutExpired:
+            return False, 0, "curl timed out"
+        except FileNotFoundError:
+            return False, 0, "curl not installed"
+
+        if done.returncode != 0:
+            return False, 0, f"curl exit {done.returncode}: {done.stderr.strip()[:160]}"
+
+        code_str, _, ctype = done.stdout.partition("|")
+        try:
+            code = int(code_str.strip())
+        except ValueError:
+            return False, 0, f"unparseable curl output: {done.stdout[:80]!r}"
+
+        if code != 200:
+            return False, code, f"{code} {ctype}"
+        if not self._is_media(ctype):
+            # 200 but not media: an interstitial, not the asset.
+            return False, 200, f"200 but content-type={ctype!r} (not media)"
+        return True, 200, url
+
     def probe(self, url: str) -> tuple[bool, int, str]:
         """Returns (ok, status_code, detail). Retries transient failures."""
+        pinned = bool(self.pinner and self.pinner.enabled)
         for attempt in range(self.retries + 1):
             self._throttle()
+            if pinned:
+                ok, code, detail = self._probe_pinned(url)
+                if code == 0 and attempt < self.retries:
+                    time.sleep(2 ** attempt)
+                    continue
+                return ok, code, detail
             try:
                 resp = self.session.head(url, timeout=self.timeout, allow_redirects=True)
                 if resp.status_code == 200:
+                    if not self._is_media(resp.headers.get("content-type", "")):
+                        return False, 200, (
+                            f"200 but content-type={resp.headers.get('content-type')!r} (not media)"
+                        )
                     return True, 200, url
                 # 429/5xx are worth another go; 403/404 are the real answer.
                 if resp.status_code in (429, 500, 502, 503, 504) and attempt < self.retries:
@@ -410,7 +571,16 @@ def main() -> int:
     for c in candidates:
         print(f"    {c.name:16} {c.url_template}")
 
-    prober = Prober(args.proxy, args.timeout, args.retries)
+    pinner = DnsPinner(args.timeout, args.pin_dns)
+    if args.pin_dns:
+        hosts = sorted({urlsplit(c.url_template.format(account=c.name, cloud=c.name)).hostname
+                        for c in candidates})
+        print("\nResolving hosts over DoH (bypasses hijacking resolvers):")
+        for host in hosts:
+            addresses = pinner.addresses_for(host)
+            print(f"    {host:24} {', '.join(addresses) if addresses else 'FAILED'}")
+
+    prober = Prober(args.proxy, args.timeout, args.retries, pinner)
 
     with ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
         verdicts = list(pool.map(
