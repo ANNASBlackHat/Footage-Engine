@@ -40,7 +40,7 @@ repo_root = str(Path(__file__).resolve().parent.parent)
 if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
-from sqlalchemy import desc, select, text
+from sqlalchemy import asc, desc, select, text
 from tqdm import tqdm
 
 from footage_engine.chunking.detector import extract_video_clip
@@ -88,6 +88,17 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=5,
         help="Commit database changes every N chunks (default: 5).",
+    )
+    parser.add_argument(
+        "--cookies",
+        type=str,
+        default=None,
+        help="Path to YouTube cookies file (Netscape format) or raw cookie string for yt-dlp.",
+    )
+    parser.add_argument(
+        "--oldest-first",
+        action="store_true",
+        help="Process from oldest to newest chunks (useful when running parallel to another worker working newest to oldest).",
     )
     return parser.parse_args()
 
@@ -169,7 +180,9 @@ def main() -> int:
         storage = None
 
     SessionLocal = get_session_factory(cfg.DATABASE_URL)
-    yt_adapter = YouTubeAdapter()
+    yt_adapter = YouTubeAdapter(cookies=args.cookies)
+    if args.cookies:
+        logger.info(f"Using YouTube cookies from: {args.cookies}")
 
     print("=" * 72)
     print("MIGRATE CHUNKS TO GOOGLE DRIVE")
@@ -200,8 +213,11 @@ def main() -> int:
         if args.media_item_id:
             query = query.where(Chunk.media_item_id == args.media_item_id)
 
-        # Order from newest (latest created_at) to oldest
-        query = query.order_by(desc(Chunk.created_at), desc(Chunk.id))
+        # Order chunks (default: newest first; or oldest first)
+        if args.oldest_first:
+            query = query.order_by(asc(Chunk.created_at), asc(Chunk.id))
+        else:
+            query = query.order_by(desc(Chunk.created_at), desc(Chunk.id))
 
         if args.limit:
             query = query.limit(args.limit)
