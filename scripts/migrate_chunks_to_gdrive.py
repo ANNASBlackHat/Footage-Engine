@@ -100,6 +100,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Process from oldest to newest chunks (useful when running parallel to another worker working newest to oldest).",
     )
+    parser.add_argument(
+        "--all-broken",
+        action="store_true",
+        help="Inspect all non-Drive chunks (including ImageKit) and migrate any that return non-200 or connection errors.",
+    )
     return parser.parse_args()
 
 
@@ -144,6 +149,9 @@ def is_url_accessible(path: str) -> tuple[bool, str]:
         return False, "path is empty"
     if path.startswith(("http://", "https://")):
         url = path
+    elif path.startswith("/footage_engine/raw/"):
+        # ImageKit relative path
+        url = f"https://ik.imagekit.io/annassocial{path}"
     else:
         # Default to Cloudinary endpoint if relative
         url = f"https://res.cloudinary.com/qdfnsveu/video/upload/{path.lstrip('/')}"
@@ -156,7 +164,7 @@ def is_url_accessible(path: str) -> tuple[bool, str]:
             return False, f"HTTP 200 but not media ({ctype})"
         return False, f"HTTP {resp.status_code}"
     except Exception as e:
-        return False, f"Request failed: {e}"
+        return False, f"{type(e).__name__}: {str(e)[:60]}"
 
 
 def main() -> int:
@@ -186,7 +194,9 @@ def main() -> int:
 
     print("=" * 72)
     print("MIGRATE CHUNKS TO GOOGLE DRIVE")
-    print(f"Target: Cloudinary chunks (ordered: latest -> oldest)")
+    target_desc = "All broken non-Drive chunks (including ImageKit)" if args.all_broken else "Cloudinary chunks"
+    order_desc = "oldest -> newest" if args.oldest_first else "newest -> oldest"
+    print(f"Target: {target_desc} (ordered: {order_desc})")
     if args.media_item_id:
         print(f"Filter media_item_id: {args.media_item_id}")
     if args.limit:
@@ -196,20 +206,34 @@ def main() -> int:
     print("=" * 72)
 
     with SessionLocal() as session:
-        # Query chunks with broken Cloudinary paths, excluding any that are already in Drive
-        query = (
-            select(Chunk)
-            .join(MediaItem, Chunk.media_item_id == MediaItem.id)
-            .where(
-                (
-                    (Chunk.storage_path.like("%cloudinary%"))
-                    | (Chunk.storage_path.like("%qdfnsveu%"))
-                    | (Chunk.storage_path.like("footage_engine/raw/chunks/%"))
+        if args.all_broken:
+            # Query all non-Drive chunks that have an explicit path (including ImageKit)
+            query = (
+                select(Chunk)
+                .join(MediaItem, Chunk.media_item_id == MediaItem.id)
+                .where(
+                    Chunk.storage_path.isnot(None),
+                    Chunk.storage_path != "",
+                    ~Chunk.storage_path.like("%drive.google.com%"),
+                    ~Chunk.storage_path.like("%googleusercontent.com%"),
+                    (text("LENGTH(chunks.storage_path) > 44 OR chunks.storage_path LIKE '%/%' OR chunks.storage_path LIKE '%.%'")),
                 )
-                & (~Chunk.storage_path.like("%drive.google.com%"))
-                & (~Chunk.storage_path.like("%googleusercontent.com%"))
             )
-        )
+        else:
+            # Query chunks with broken Cloudinary paths, excluding any that are already in Drive
+            query = (
+                select(Chunk)
+                .join(MediaItem, Chunk.media_item_id == MediaItem.id)
+                .where(
+                    (
+                        (Chunk.storage_path.like("%cloudinary%"))
+                        | (Chunk.storage_path.like("%qdfnsveu%"))
+                        | (Chunk.storage_path.like("footage_engine/raw/chunks/%"))
+                    )
+                    & (~Chunk.storage_path.like("%drive.google.com%"))
+                    & (~Chunk.storage_path.like("%googleusercontent.com%"))
+                )
+            )
         if args.media_item_id:
             query = query.where(Chunk.media_item_id == args.media_item_id)
 
@@ -225,7 +249,7 @@ def main() -> int:
         chunks_to_migrate: list[Chunk] = list(session.execute(query).scalars().all())
 
         if not chunks_to_migrate:
-            print("No matching Cloudinary chunks found to migrate.")
+            print("No matching candidate chunks found to migrate.")
             return 0
 
         print(f"Found {len(chunks_to_migrate)} candidate chunk(s) to inspect.\n")
