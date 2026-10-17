@@ -34,7 +34,7 @@ groups = [
     ["torch"],
     ["transformers>=4.57", "sentence-transformers", "pillow", "numpy"],
     ["sqlalchemy", "pydantic", "pydantic-settings", "python-dotenv"],
-    ["pymilvus", "psycopg2-binary", "imagekitio", "requests", "opencv-python-headless"],
+    ["pymilvus", "psycopg2-binary", "psycopg[binary]", "imagekitio", "requests", "opencv-python-headless"],
 ]
 for group in groups:
     print(f"[setup] pip install {' '.join(group)} ...", flush=True)
@@ -81,6 +81,9 @@ def build_bundle(tmpdir: str) -> tuple[str, str, str]:
 
     settings = get_settings()
     env = {k: v for k, v in settings.model_dump().items() if v is not None}
+    # Search worker only embeds queries; avoid demanding local laptop Google Drive OAuth file on Colab
+    env["STORAGE_BACKEND"] = "local"
+    env.pop("GDRIVE_OAUTH_CREDENTIALS_FILE", None)
     env_path = os.path.join(tmpdir, "fe_env.json")
     with open(env_path, "w") as f:
         json.dump(env, f)
