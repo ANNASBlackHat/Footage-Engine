@@ -196,6 +196,8 @@ def _format_report(summary: dict) -> str:
         )
     if summary.get("qwen"):
         lines.append("🧠 Qwen embeddings: on")
+    if summary.get("captioned"):
+        lines.append(f"📝 {summary['captioned']} chunk(s) captioned")
     if summary.get("elapsed"):
         lines.append(f"⏱ {summary['elapsed']:.1f}s")
     lines.append(f"▶️ {summary.get('url', '')}")
@@ -248,6 +250,15 @@ def parse_args():
         "--skip-qwen",
         action="store_true",
         help="Skip Qwen2-VL embeddings even if Qwen Zilliz credentials or collection are set in environment",
+    )
+    parser.add_argument(
+        "--caption",
+        action="store_true",
+        help=(
+            "After embedding, generate chunk captions/tags with Qwen-VL "
+            "(writes Chunk.caption / Chunk.tags). Requires the qwen extra on a GPU "
+            "machine, or run scripts/caption_chunks.py separately."
+        ),
     )
     parser.add_argument(
         "--cookies",
@@ -628,6 +639,30 @@ def _run(args, summary: dict):
                         f"(X-CLIP embeddings remain intact and searchable).",
                         flush=True,
                     )
+
+            # Step 4c: Optional Qwen-VL chunk captioning
+            if args.caption:
+                from scripts.caption_chunks import process_item as caption_item
+
+                print(
+                    f"\n  → Computing chunk captions "
+                    f"({cfg.QWEN_CAPTION_MODEL})...",
+                    flush=True,
+                )
+                t_cap_start = time.time()
+                n_captioned = caption_item(
+                    database_url=cfg.DATABASE_URL,
+                    media_item_id=item.id,
+                    model_id=cfg.QWEN_CAPTION_MODEL,
+                    num_frames=cfg.QWEN_CAPTION_FRAMES,
+                    overwrite=False,
+                )
+                print(
+                    f"  ✓ Captioned {n_captioned} chunk interval(s) "
+                    f"in {time.time() - t_cap_start:.1f}s.",
+                    flush=True,
+                )
+                summary["captioned"] = n_captioned
 
             elapsed = time.time() - start_time
             print("\n" + "=" * 80, flush=True)

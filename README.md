@@ -147,6 +147,10 @@ Configure your `.env` file according to the options defined in `.env.example` / 
 | `DEFAULT_EMBEDDING_VERSION` | `1.0` | Model version tag stored with indexed vectors |
 | `EMBEDDING_DIMENSION` | `512` | Vector embedding dimension size |
 | `EMBEDDING_DEVICE` | `auto` | Device for inference: `auto`, `cuda:0`, `mps`, or `cpu` |
+| **Qwen Captioning** | | |
+| `QWEN_CAPTION_MODEL` | `Qwen/Qwen3-VL-2B-Instruct` | VLM used to generate `Chunk.caption` / `Chunk.tags` (distinct from the embedding model) |
+| `QWEN_CAPTION_FRAMES` | `3` | Frames sampled per chunk for captioning |
+| `QWEN_CAPTION_DEVICE` | `auto` | Device for caption inference: `auto`, `cuda`, or `cpu` |
 | **Chunking Parameters** | | |
 | `CHUNK_THRESHOLD_SEC` | `45.0` | Clips shorter than this threshold become a single chunk |
 | `SLIDING_WINDOW_SEC` | `10.0` | Window length (seconds) for sub-chunking long scenes |
@@ -183,6 +187,15 @@ uv run python scripts/ingest_from_urls.py urls.txt
 
 # Ingest a YouTube documentary and associate with an entity
 uv run python scripts/ingest_youtube_video.py "https://www.youtube.com/watch?v=..." --entity "Aye-aye" --entity-type animal
+
+# Ingest a YouTube video with TransNetV2 deep scene detection, parallel ffmpeg
+# clipping, X-CLIP embedding, and Qwen-VL chunk captions in one pass:
+uv run python scripts/ingest_youtube_video_transnet.py "https://www.youtube.com/watch?v=..." \
+    --threshold 0.5 --workers 4 --caption
+
+# Caption already-ingested chunks on GPU — auto-selects the item with the most
+# uncaptioned chunks (or target one explicitly):
+uv run python scripts/caption_chunks.py --media-item-id auto --max-start-ts 600.0
 
 # Ingest keywords from a text file tagged with an entity
 uv run python scripts/ingest_from_keywords.py --file keywords.txt --entity "Bermuda Triangle" --entity-type location

@@ -112,6 +112,12 @@ class Settings(BaseSettings):
     QWEN_ZILLIZ_URI: str | None = None
     QWEN_ZILLIZ_TOKEN: str | None = None
     QWEN_ZILLIZ_COLLECTION_NAME: str | None = None
+    # VLM used to generate chunk captions/tags (writes to Chunk.caption /
+    # Chunk.tags). Distinct from the embedding model above — this is a
+    # generative VLM, not an embedding model. Overridable via .env.
+    QWEN_CAPTION_MODEL: str = "Qwen/Qwen3-VL-2B-Instruct"
+    QWEN_CAPTION_FRAMES: int = 3
+    QWEN_CAPTION_DEVICE: str = "auto"  # 'auto', 'cuda', or 'cpu'
     EMBEDDING_DIMENSION: int = 512
     EMBEDDING_DEVICE: str = "auto"  # 'auto', 'cuda', or 'cpu'
     EMBEDDING_BATCH_SIZE: int = 8  # Chunks per forward pass (increase to 16 on Colab GPU)
