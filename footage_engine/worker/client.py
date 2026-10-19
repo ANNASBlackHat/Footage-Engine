@@ -19,9 +19,7 @@ from footage_engine.worker.queue import (
     enqueue_job,
     get_job,
     list_workers,
-    wait_for_job,
 )
-from footage_engine.worker.tasks import available_tasks
 
 #: Filters accepted by the search tasks (mirrors the MCP tool arguments).
 _FILTER_KEYS = (

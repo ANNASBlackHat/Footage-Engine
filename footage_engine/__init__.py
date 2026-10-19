@@ -11,7 +11,10 @@ from footage_engine.orchestrator import (
     ingest_url_list,
     search_and_ingest,
 )
-from footage_engine.pipeline.processor import BatchProcessor
+try:
+    from footage_engine.pipeline.processor import BatchProcessor
+except Exception:
+    BatchProcessor = None
 from footage_engine.retrieval.api import (
     RetrievalAPI,
     fine_localize,
