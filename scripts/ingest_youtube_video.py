@@ -4,7 +4,8 @@ import time
 
 import footage_engine as fe
 from footage_engine.config import get_settings
-from footage_engine.models.db import init_db
+from footage_engine.models.db import get_db_session, init_db
+from footage_engine.models.media import MediaItem
 from footage_engine.vector import get_vector_store
 
 
@@ -64,7 +65,10 @@ def main():
     print(f"  ✓ Status       : {item.status.value}", flush=True)
 
     if item.status == fe.MediaStatus.DONE:
-        print(f"\n✨ This video has ALREADY been processed and indexed! (Found {len(item.chunks)} chunks in DB).", flush=True)
+        with get_db_session(cfg.DATABASE_URL) as session:
+            db_item = session.get(MediaItem, item.id)
+            chunks_count = len(db_item.chunks) if db_item else 0
+        print(f"\n✨ This video has ALREADY been processed and indexed! (Found {chunks_count} chunks in DB).", flush=True)
         print("You can search it immediately using: uv run python scripts/search_cli.py \"<your search query>\"")
         return
 

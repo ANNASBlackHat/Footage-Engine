@@ -286,6 +286,11 @@ def parse_args():
         "--entity-type", default="other",
         help="Entity type if creating a new entity ('ship', 'animal', 'person', 'location', 'event', 'other')",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Force re-processing/re-chunking even if video has already been ingested/indexed",
+    )
     return parser.parse_args()
 
 
@@ -389,21 +394,37 @@ def _run(args, summary: dict):
     summary["duration"] = item.duration_sec
     summary["elapsed"] = time.time() - summary["_t0"]
 
-    if item.status == fe.MediaStatus.DONE and not args.output_dir:
-        with get_db_session(cfg.DATABASE_URL) as session:
-            db_item = session.get(MediaItem, item.id)
-            has_qwen_chunks = any(
-                c.embedding_model == cfg.QWEN_MODEL_NAME
-                for c in (db_item.chunks if db_item else [])
-            )
-        if run_qwen and not has_qwen_chunks:
-            print(f"\n✨ Video is indexed with X-CLIP, but Qwen embeddings are missing.", flush=True)
-            print("  Proceeding to compute Qwen embeddings...", flush=True)
+    need_local_export = bool(args.output_dir)
+    need_cloud_upload = bool(args.upload_chunks if args.upload_chunks is not None else cfg.UPLOAD_CHUNKS_TO_STORAGE)
+
+    with get_db_session(cfg.DATABASE_URL) as session:
+        db_item = session.get(MediaItem, item.id)
+        db_chunks = list(db_item.chunks) if db_item else []
+        chunks_count = len(db_chunks)
+        unuploaded_chunks = sum(1 for c in db_chunks if not c.storage_path)
+        has_qwen_chunks = any(
+            c.embedding_model == cfg.QWEN_MODEL_NAME
+            for c in db_chunks
+        )
+
+    if item.status == fe.MediaStatus.DONE and not args.force:
+        need_qwen = run_qwen and not has_qwen_chunks
+        need_upload = need_cloud_upload and unuploaded_chunks > 0
+
+        if need_qwen or need_upload or need_local_export:
+            reasons = []
+            if need_upload:
+                reasons.append(f"{unuploaded_chunks} chunk(s) not yet uploaded to storage")
+            if need_qwen:
+                reasons.append("Qwen embeddings are missing")
+            if need_local_export:
+                reasons.append(f"exporting clips to {args.output_dir}")
+            print(f"\n✨ Video is indexed ({chunks_count} chunks in DB), but proceeding because: {', '.join(reasons)}.", flush=True)
         else:
-            print(f"\n✨ This video has ALREADY been processed and indexed! (Found {len(item.chunks)} chunks in DB).", flush=True)
+            print(f"\n✨ This video has ALREADY been processed and indexed! (Found {chunks_count} chunks in DB).", flush=True)
             print("You can search it immediately using: uv run python scripts/search_cli.py \"<your search query>\"")
             summary["status"] = "skipped"
-            summary["chunks"] = len(item.chunks)
+            summary["chunks"] = chunks_count
             return
 
     # Resolve local path
@@ -423,6 +444,14 @@ def _run(args, summary: dict):
             return
 
         chunks = db_item.chunks
+        if args.force and chunks:
+            print(f"  ⚠️ --force flag active: clearing {len(chunks)} existing chunk records...", flush=True)
+            for c in list(chunks):
+                session.delete(c)
+            session.commit()
+            session.refresh(db_item)
+            chunks = db_item.chunks
+
         if not chunks:
             candidates = preprocess_media_transnet(
                 media_item=db_item,
