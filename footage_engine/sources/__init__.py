@@ -5,6 +5,7 @@ from footage_engine.sources.pixabay import PixabayAdapter
 from footage_engine.sources.pexels import PexelsAdapter
 from footage_engine.sources.coverr import CoverrAdapter
 from footage_engine.sources.direct import DirectURLAdapter
+from footage_engine.sources.unsplash import UnsplashAdapter
 from footage_engine.sources.protocol import IterableURLProvider, URLProvider
 from footage_engine.sources.youtube import (
     YouTubeAdapter,
@@ -19,6 +20,7 @@ __all__ = [
     "PixabayAdapter",
     "PexelsAdapter",
     "CoverrAdapter",
+    "UnsplashAdapter",
     "DirectURLAdapter",
     "YouTubeAdapter",
     "URLProvider",

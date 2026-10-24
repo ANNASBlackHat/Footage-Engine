@@ -126,7 +126,7 @@ same too, so an MCP tool call and a job submit are the same request.
 | `media_type` | no | - | `"video"` or `"image"` |
 | `orientation` | no | - | `landscape`/`horizontal` or `portrait`/`vertical` or `square` |
 | `min_duration` / `max_duration` | no | - | Seconds |
-| `provider` | no | - | `pexels`, `pixabay`, `coverr`, `youtube`, `manual` |
+| `provider` | no | - | `pexels`, `pixabay`, `coverr`, `unsplash`, `youtube`, `manual` |
 | `entity_name` / `entity_id` | no | - | Scope to a canonical entity |
 
 Result:

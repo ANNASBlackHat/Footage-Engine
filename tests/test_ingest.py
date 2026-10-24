@@ -235,3 +235,113 @@ def test_provider_orientation_and_media_type_handling(monkeypatch):
     cands_vert = coverr.search(keyword="nature", max_results=5, orientation="portrait")
     assert len(cands_vert) == 1
     assert cands_vert[0].source_id == "cov_vert"
+
+
+def test_unsplash_adapter_search(monkeypatch):
+    from footage_engine.sources.unsplash import UnsplashAdapter
+
+    adapter = UnsplashAdapter(api_key="fake_key")
+    captured = {}
+    mock_response = {
+        "total": 1,
+        "total_pages": 1,
+        "results": [
+            {
+                "id": "abc123",
+                "width": 4000,
+                "height": 3000,
+                "color": "#A7A2A1",
+                "blur_hash": "LaLXMa9Fx",
+                "description": "A man drinking a coffee.",
+                "alt_description": "man drinking coffee",
+                "urls": {
+                    "raw": "https://images.unsplash.com/photo-1?ixid=raw",
+                    "full": "https://images.unsplash.com/photo-1?ixid=full",
+                    "regular": "https://images.unsplash.com/photo-1?ixid=regular",
+                    "small": "https://images.unsplash.com/photo-1?ixid=small",
+                    "thumb": "https://images.unsplash.com/photo-1?ixid=thumb",
+                },
+                "links": {
+                    "html": "https://unsplash.com/photos/abc123",
+                    "download_location": "https://api.unsplash.com/photos/abc123/download",
+                },
+                "user": {
+                    "name": "Jane Doe",
+                    "username": "janedoe",
+                    "links": {"html": "https://unsplash.com/@janedoe"},
+                },
+            }
+        ],
+    }
+
+    def mock_unsplash_get(url, headers=None, params=None, **kwargs):
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["params"] = params
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = mock_response
+        resp.raise_for_status = MagicMock()
+        return resp
+
+    monkeypatch.setattr("requests.get", mock_unsplash_get)
+    cands = adapter.search(
+        keyword="coffee", max_results=5, media_type="image", orientation="portrait"
+    )
+
+    assert captured["url"] == "https://api.unsplash.com/search/photos"
+    assert captured["headers"]["Authorization"] == "Client-ID fake_key"
+    assert captured["headers"]["Accept-Version"] == "v1"
+    assert captured["params"]["query"] == "coffee"
+    assert captured["params"]["orientation"] == "portrait"
+    assert captured["params"]["per_page"] == 5
+
+    assert len(cands) == 1
+    cand = cands[0]
+    assert cand.provider == "unsplash"
+    assert cand.source_id == "abc123"
+    assert cand.source_url == "https://images.unsplash.com/photo-1?ixid=regular"
+    assert cand.media_type == "image"
+    assert cand.resolution == "4000x3000"
+    assert cand.license_type == "unsplash_free"
+    assert cand.metadata["photographer"] == "Jane Doe"
+    assert cand.metadata["download_location"] == "https://api.unsplash.com/photos/abc123/download"
+
+
+def test_unsplash_skips_video_without_request(monkeypatch):
+    from footage_engine.sources.unsplash import UnsplashAdapter
+
+    adapter = UnsplashAdapter(api_key="fake_key")
+    called = {"count": 0}
+
+    def mock_get(*args, **kwargs):
+        called["count"] += 1
+        raise AssertionError("Unsplash should not be queried for video searches")
+
+    monkeypatch.setattr("requests.get", mock_get)
+    assert adapter.search(keyword="ocean", media_type="video") == []
+    assert called["count"] == 0
+
+
+def test_unsplash_track_download(monkeypatch):
+    from footage_engine.sources.unsplash import UnsplashAdapter
+
+    adapter = UnsplashAdapter(api_key="fake_key")
+    captured = {}
+
+    def mock_get(url, headers=None, **kwargs):
+        captured["url"] = url
+        captured["headers"] = headers
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.raise_for_status = MagicMock()
+        return resp
+
+    monkeypatch.setattr("requests.get", mock_get)
+    assert adapter.track_download("abc123") is True
+    assert captured["url"] == "https://api.unsplash.com/photos/abc123/download"
+    assert captured["headers"]["Authorization"] == "Client-ID fake_key"
+
+
+def test_unsplash_adapter_registered(test_orchestrator):
+    assert "unsplash" in test_orchestrator.adapters

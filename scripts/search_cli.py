@@ -27,7 +27,7 @@ def main():
     )
     parser.add_argument(
         "--provider", default=None,
-        help="Filter by provider ('pexels', 'pixabay', 'coverr', 'youtube', 'manual')"
+        help="Filter by provider ('pexels', 'pixabay', 'coverr', 'unsplash', 'youtube', 'manual')"
     )
     parser.add_argument(
         "--top-k", type=int, default=5,

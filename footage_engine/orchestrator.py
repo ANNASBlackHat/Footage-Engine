@@ -19,6 +19,7 @@ from footage_engine.sources.direct import DirectURLAdapter
 from footage_engine.sources.pexels import PexelsAdapter
 from footage_engine.sources.pixabay import PixabayAdapter
 from footage_engine.sources.protocol import URLProvider
+from footage_engine.sources.unsplash import UnsplashAdapter
 from footage_engine.sources.youtube import (
     YouTubeAdapter,
     extract_youtube_video_id,
@@ -66,6 +67,7 @@ class Orchestrator:
             "pixabay": PixabayAdapter(api_key=self.settings.PIXABAY_API_KEY),
             "pexels": PexelsAdapter(api_key=self.settings.PEXELS_API_KEY),
             "coverr": CoverrAdapter(api_key=self.settings.COVERR_API_KEY),
+            "unsplash": UnsplashAdapter(api_key=self.settings.UNSPLASH_ACCESS_KEY),
             "youtube": YouTubeAdapter(),
         }
 
@@ -185,6 +187,14 @@ class Orchestrator:
                     resp.raise_for_status()
                     content = resp.content
                 print(f"    Downloaded {len(content) / (1024*1024):.2f} MB.", flush=True)
+
+                # Some providers (e.g. Unsplash) require a download-event ping.
+                track_download = getattr(self.adapters.get(provider), "track_download", None)
+                if track_download and source_id:
+                    try:
+                        track_download(source_id, (metadata or {}).get("download_location"))
+                    except Exception as e:
+                        logger.warning(f"Download tracking failed for {provider}:{source_id}: {e}")
             except Exception as e:
                 logger.error(f"Failed to download raw asset from {normalized_url}: {e}")
                 with get_db_session(self.database_url) as session:
@@ -252,6 +262,7 @@ class Orchestrator:
         candidate: Candidate,
         entity_name: Optional[str] = None,
         entity_id: Optional[str] = None,
+        entity_type: str = "other",
     ) -> MediaItem:
         """Ingests a standard Candidate object."""
         return self.ingest(
@@ -265,6 +276,7 @@ class Orchestrator:
             resolution=candidate.resolution,
             entity_name=entity_name,
             entity_id=entity_id,
+            entity_type=entity_type,
         )
 
     def search_and_ingest(
@@ -276,6 +288,7 @@ class Orchestrator:
         orientation: Optional[str] = None,
         entity_name: Optional[str] = None,
         entity_id: Optional[str] = None,
+        entity_type: str = "other",
     ) -> list[MediaItem]:
         """Search a provider and ingest newly discovered media candidates."""
         adapter = self.adapters.get(provider)
@@ -302,7 +315,9 @@ class Orchestrator:
 
         results: list[MediaItem] = []
         for cand in candidates:
-            item = self.ingest_candidate(cand, entity_name=entity_name, entity_id=entity_id)
+            item = self.ingest_candidate(
+                cand, entity_name=entity_name, entity_id=entity_id, entity_type=entity_type
+            )
             results.append(item)
         return results
 
@@ -383,12 +398,13 @@ def ingest(
 
 def search_and_ingest(
     keyword: str,
-    provider: Literal["pixabay", "pexels", "coverr"] = "pixabay",
+    provider: Literal["pixabay", "pexels", "coverr", "unsplash"] = "pixabay",
     max_results: int = 20,
     media_type: str = "video",
     orientation: str | None = None,
     entity_name: str | None = None,
     entity_id: str | None = None,
+    entity_type: str = "other",
 ) -> list[MediaItem]:
     return get_orchestrator().search_and_ingest(
         keyword=keyword,
@@ -398,6 +414,7 @@ def search_and_ingest(
         orientation=orientation,
         entity_name=entity_name,
         entity_id=entity_id,
+        entity_type=entity_type,
     )
 
 

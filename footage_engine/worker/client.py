@@ -200,7 +200,7 @@ def main() -> int:
     parser.add_argument("--orientation", default=None, help="landscape/horizontal or portrait/vertical")
     parser.add_argument("--min-duration", type=float, default=None)
     parser.add_argument("--max-duration", type=float, default=None)
-    parser.add_argument("--provider", default=None, help="pexels, pixabay, coverr, youtube, manual")
+    parser.add_argument("--provider", default=None, help="pexels, pixabay, coverr, unsplash, youtube, manual")
     parser.add_argument("--entity-name", default=None)
     parser.add_argument("--entity-id", default=None)
     parser.add_argument(

@@ -115,7 +115,7 @@ def create_mcp_server(
             "Semantically search for video or image footage using natural language queries. "
             "Supports filtering by canonical entity (entity_name or entity_id), media type ('video', 'image'), "
             "orientation ('landscape'/'horizontal' or 'vertical'/'portrait'), "
-            "duration bounds (min_duration, max_duration in seconds), and provider ('pexels', 'pixabay', 'coverr', 'youtube', 'manual'). "
+            "duration bounds (min_duration, max_duration in seconds), and provider ('pexels', 'pixabay', 'coverr', 'unsplash', 'youtube', 'manual'). "
             "Returns ranked video chunks with scores, exact start/end timestamps, orientation, aspect ratio, "
             "entity associations, and media streaming/storage URLs."
         ),
@@ -283,7 +283,7 @@ def create_mcp_server(
     @server.tool(
         name="ingest_keywords",
         description=(
-            "Search stock footage providers (pexels, pixabay, coverr) by keyword, "
+            "Search stock footage providers (pexels, pixabay, coverr, unsplash) by keyword, "
             "deduplicate candidates before downloading, and optionally process them into the vector store."
         ),
     )

@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     PIXABAY_API_KEY: str | None = None
     PEXELS_API_KEY: str | None = None
     COVERR_API_KEY: str | None = None
+    UNSPLASH_ACCESS_KEY: str | None = None
     YOUTUBE_COOKIES: str | None = None  # Local file path, URL, or raw Netscape/base64 cookie string
     YOUTUBE_COOKIES_FROM_BROWSER: str | None = None  # e.g. 'chrome', 'firefox', 'brave', 'safari'
 

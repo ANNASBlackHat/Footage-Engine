@@ -1,4 +1,4 @@
-"""Batch ingest footage from Pexels, Pixabay & Coverr using keywords from keywords.txt."""
+"""Batch ingest footage from Pexels, Pixabay, Coverr & Unsplash using keywords from keywords.txt."""
 
 import os
 import sys
@@ -37,7 +37,7 @@ import argparse
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Batch ingest footage from Pexels, Pixabay & Coverr using keywords."
+        description="Batch ingest footage from Pexels, Pixabay, Coverr & Unsplash using keywords."
     )
     parser.add_argument(
         "--file", default="keywords.txt",
@@ -55,6 +55,14 @@ def main():
         "--max", type=int, default=int(os.environ.get("MAX_RESULTS_PER_KEYWORD", "2")),
         help="Max items per keyword search (default: 2)"
     )
+    parser.add_argument(
+        "--providers", default=os.environ.get("PROVIDERS", "pexels,pixabay,coverr,unsplash"),
+        help="Comma-separated providers to query (default: pexels,pixabay,coverr,unsplash)"
+    )
+    parser.add_argument(
+        "--keyword", default=None,
+        help="Ingest a single keyword instead of reading from --file"
+    )
     args = parser.parse_args()
 
     cfg = get_settings()
@@ -62,19 +70,25 @@ def main():
     vec_store = get_vector_store(cfg)
 
     # 1. Load keywords
-    keywords = load_keywords(args.file)
+    keywords = [args.keyword] if args.keyword else load_keywords(args.file)
     if not keywords:
         print("No keywords found to process.", flush=True)
         return
 
     # Providers to query (excluding YouTube)
-    providers = ["pexels", "pixabay", "coverr"]
+    available_providers = ["pexels", "pixabay", "coverr", "unsplash"]
+    providers = [p.strip().lower() for p in args.providers.split(",") if p.strip()]
+    unknown = [p for p in providers if p not in available_providers]
+    if unknown:
+        parser.error(f"Unknown provider(s): {', '.join(unknown)}. Choose from: {', '.join(available_providers)}")
+    if not providers:
+        parser.error("At least one provider is required.")
     max_per_kw = args.max
     media_type = os.environ.get("MEDIA_TYPE", cfg.DEFAULT_MEDIA_TYPE).lower()
     orientation = (os.environ.get("ORIENTATION") or os.environ.get("ASSET_ORIENTATION") or cfg.DEFAULT_ORIENTATION).lower()
 
     print("=" * 80, flush=True)
-    print("🎬 Footage Engine — Multi-Keyword Ingestion (Pexels, Pixabay & Coverr)", flush=True)
+    print("🎬 Footage Engine — Multi-Keyword Ingestion (Pexels, Pixabay, Coverr & Unsplash)", flush=True)
     print("=" * 80, flush=True)
     print(f"• Total unique keywords: {len(keywords)}", flush=True)
     if args.entity:
@@ -111,7 +125,7 @@ def main():
                     print(f"   - {prov.upper():<8}: No assets found or provider skipped", flush=True)
             except Exception as e:
                 err_msg = str(e)
-                if "API key not found" in err_msg or "401" in err_msg:
+                if "key not found" in err_msg.lower() or "401" in err_msg:
                     print(f"   ⚠️  {prov.upper():<8}: API key missing in .env", flush=True)
                 else:
                     print(f"   ⚠️  {prov.upper():<8}: {e}", flush=True)

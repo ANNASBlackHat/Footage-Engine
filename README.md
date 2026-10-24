@@ -15,7 +15,7 @@ Verified from `pyproject.toml` and `uv.lock`:
 - **Multimodal AI & Embeddings:** PyTorch (`torch`), HuggingFace Transformers (Microsoft X-CLIP `microsoft/xclip-base-patch32`), NumPy
 - **Vector Database:** Zilliz Cloud / Milvus (`pymilvus`) with fast In-Memory Vector Store fallback
 - **Storage Backends:** Local Filesystem, ImageKit.io (`imagekitio`), Cloudinary (`cloudinary`, optional extra)
-- **Stock & Web Media Providers:** REST API clients for Pexels, Pixabay, Coverr, YouTube (via `yt-dlp`), and direct URLs
+- **Stock & Web Media Providers:** REST API clients for Pexels, Pixabay, Coverr, Unsplash, YouTube (via `yt-dlp`), and direct URLs
 - **Testing:** `pytest`, `pytest-mock`
 - **Package & Dependency Management:** `uv` / `setuptools`
 
@@ -36,7 +36,7 @@ footage-engine/
 │   ├── models/            # SQLAlchemy database entities and Pydantic schemas
 │   ├── pipeline/          # Resumable batch processor for pending media items
 │   ├── retrieval/         # Vector search, hybrid filtering, and fine localization
-│   ├── sources/           # Stock media providers (Pexels, Pixabay, Coverr, Direct)
+│   ├── sources/           # Stock media providers (Pexels, Pixabay, Coverr, Unsplash, Direct)
 │   ├── storage/           # Storage backends (Local filesystem, ImageKit, Cloudinary, Google Drive)
 │   ├── vector/            # Vector store clients (Zilliz Cloud, In-Memory)
 │   ├── worker/            # Async job queue + worker (queue-driven footage search)
@@ -110,6 +110,7 @@ Configure your `.env` file according to the options defined in `.env.example` / 
 | `PEXELS_API_KEY` | string | API key for [Pexels API](https://www.pexels.com/api/) |
 | `PIXABAY_API_KEY` | string | API key for [Pixabay API](https://pixabay.com/api/docs/) |
 | `COVERR_API_KEY` | string | API key for [Coverr API](https://coverr.co/) |
+| `UNSPLASH_ACCESS_KEY` | string | Access key for the [Unsplash API](https://unsplash.com/developers) (images only) |
 | `YOUTUBE_COOKIES` | string | Optional: Local file path (`/path/to/cookies.txt`), URL, or raw Netscape/base64 string |
 | `YOUTUBE_COOKIES_FROM_BROWSER` | string | Optional: Browser to extract session cookies from (`chrome`, `firefox`, `brave`, `safari`, `edge`) |
 | **Relational Database** | | |
@@ -200,7 +201,7 @@ uv run python scripts/caption_chunks.py --media-item-id auto --max-start-ts 600.
 # Ingest keywords from a text file tagged with an entity
 uv run python scripts/ingest_from_keywords.py --file keywords.txt --entity "Bermuda Triangle" --entity-type location
 
-# Ingest curated narrative assets from Pexels, Pixabay, and Coverr
+# Ingest curated narrative assets from Pexels, Pixabay, Coverr, and Unsplash
 uv run python scripts/ingest_story_footage.py
 
 # Preview extracted URLs without ingesting
@@ -355,7 +356,7 @@ uv run footage-engine-mcp --transport sse --host 0.0.0.0 --port 8000
 | **Tool** | `get_clip_details` | Full metadata, resolution, parent media info, and storage URL for a chunk. |
 | **Tool** | `get_media_item_details` | Full details for a raw media item and all its partitioned chunk segments. |
 | **Tool** | `ingest_url` | Direct URL / YouTube ingestion with pre-spend deduplication and optional canonical `entity_name` / `entity_id`. |
-| **Tool** | `ingest_keywords` | Search stock providers (Pexels, Pixabay, Coverr) and ingest candidates. |
+| **Tool** | `ingest_keywords` | Search stock providers (Pexels, Pixabay, Coverr, Unsplash) and ingest candidates. |
 | **Tool** | `list_entities` | List registered canonical entities with their IDs, aliases, and entity types. |
 | **Tool** | `resolve_or_create_entity` | Resolve an entity by name/alias or register a new canonical entity. |
 | **Tool** | `process_pending_queue` | Batch process pending items through chunking and vector indexing. |
