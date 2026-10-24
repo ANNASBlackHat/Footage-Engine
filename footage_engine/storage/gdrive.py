@@ -323,6 +323,90 @@ def split_scopes(raw: str | Sequence[str] | None) -> list[str]:
     return [scope for scope in scopes if scope] or list(DEFAULT_SCOPES)
 
 
+def format_bytes(size: int | float | None) -> str:
+    """Formats a byte count as a compact human-readable string (``1.5 GB``)."""
+    if size is None:
+        return "n/a"
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB", "TB", "PB"):
+        if abs(value) < 1024 or unit == "PB":
+            if unit == "B":
+                return f"{int(value)} B"
+            return f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} PB"
+
+
+def get_storage_quota(settings: Any | None = None) -> dict[str, Any]:
+    """Returns the Drive storage quota for the configured credential identity.
+
+    Calls ``about.get(fields="storageQuota")``, which reports the quota of the
+    authenticated user. A service account has no Drive quota, so ``limit`` is
+    ``None`` for that identity; Shared Drive capacity is pooled at the org level
+    and is not exposed per-drive by the Drive API.
+
+    Keys: ``limit``, ``usage`` (all Google services), ``usage_in_drive``,
+    ``usage_in_drive_trash``, ``free``, and ``identity``. All sizes are bytes.
+    """
+    from footage_engine.config import get_settings
+
+    cfg = settings or get_settings()
+    service_account_configured = bool(
+        cfg.GDRIVE_SERVICE_ACCOUNT_FILE or cfg.GDRIVE_SERVICE_ACCOUNT_JSON
+    )
+    oauth_configured = bool(
+        cfg.GDRIVE_OAUTH_CREDENTIALS_FILE or cfg.GDRIVE_OAUTH_CREDENTIALS_JSON
+    )
+    if service_account_configured == oauth_configured:
+        raise ValueError(
+            "Configure exactly one Google Drive credential identity — either "
+            "GDRIVE_SERVICE_ACCOUNT_FILE/JSON or GDRIVE_OAUTH_CREDENTIALS_FILE/JSON."
+        )
+
+    if oauth_configured:
+        info = parse_oauth_credentials(
+            cfg.GDRIVE_OAUTH_CREDENTIALS_FILE, cfg.GDRIVE_OAUTH_CREDENTIALS_JSON
+        )
+        identity = "user_oauth"
+    else:
+        info = parse_credentials(
+            cfg.GDRIVE_SERVICE_ACCOUNT_FILE, cfg.GDRIVE_SERVICE_ACCOUNT_JSON
+        )
+        identity = "service_account"
+
+    if build is None:
+        raise ImportError(
+            "google-api-python-client and google-auth are required for Drive quota. "
+            'Install with: pip install "footage-engine[gdrive]"'
+        )
+
+    credentials = build_credentials(info, split_scopes(cfg.GDRIVE_SCOPES))
+    service = build("drive", "v3", credentials=credentials, cache_discovery=False)
+    raw = (
+        service.about().get(fields="storageQuota").execute() or {}
+    ).get("storageQuota") or {}
+
+    limit_raw = raw.get("limit")
+    limit = int(limit_raw) if limit_raw is not None else None
+    # A service account reports limit 0; treat that as "no quota" rather than
+    # a genuinely full 0-byte drive.
+    if limit is not None and limit <= 0:
+        limit = None
+
+    usage = int(raw.get("usage", 0) or 0)
+    usage_in_drive = int(raw.get("usageInDrive", 0) or 0)
+    usage_in_drive_trash = int(raw.get("usageInDriveTrash", 0) or 0)
+
+    return {
+        "identity": identity,
+        "limit": limit,
+        "usage": usage,
+        "usage_in_drive": usage_in_drive,
+        "usage_in_drive_trash": usage_in_drive_trash,
+        "free": max(limit - usage, 0) if limit is not None else None,
+    }
+
+
 def guess_content_type(
     filename: str,
     content_type: str | None = None,
@@ -700,6 +784,8 @@ __all__ = [
     "backoff_seconds",
     "build_credentials",
     "error_reason",
+    "format_bytes",
+    "get_storage_quota",
     "guess_content_type",
     "http_status",
     "parse_credentials",

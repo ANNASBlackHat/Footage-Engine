@@ -20,6 +20,8 @@ from footage_engine.storage.gdrive import (
     GoogleDriveStorageBackend,
     backoff_seconds,
     build_credentials,
+    format_bytes,
+    get_storage_quota,
     guess_content_type,
     parse_credentials,
     parse_oauth_credentials,
@@ -192,16 +194,39 @@ class FakePermissions:
         return FakeRequest(result={"id": "perm-1", "type": "anyone", "role": "reader"})
 
 
+class FakeAbout:
+    """The ``about`` resource: records the requested fields and returns a quota."""
+
+    def __init__(self):
+        self.calls = []
+        self.result = {
+            "storageQuota": {
+                "limit": "1000000000000",
+                "usage": "250000000000",
+                "usageInDrive": "200000000000",
+                "usageInDriveTrash": "10000000000",
+            }
+        }
+
+    def get(self, **kwargs):
+        self.calls.append(kwargs)
+        return FakeRequest(result=self.result)
+
+
 class FakeService:
     def __init__(self):
         self.files_resource = FakeFiles()
         self.permissions_resource = FakePermissions(self.files_resource)
+        self.about_resource = FakeAbout()
 
     def files(self):
         return self.files_resource
 
     def permissions(self):
         return self.permissions_resource
+
+    def about(self):
+        return self.about_resource
 
 
 @pytest.fixture
@@ -647,3 +672,74 @@ def test_missing_sdk_raises_an_install_hint(monkeypatch):
     with pytest.raises(ImportError, match="footage-engine\\[gdrive\\]"):
         make_backend(cache_dir=None)
 
+
+
+# -- storage quota ---------------------------------------------------------------
+
+
+def _quota_settings(**overrides):
+    from footage_engine.config import Settings
+
+    options = {
+        "GDRIVE_SERVICE_ACCOUNT_JSON": KEY_JSON,
+        "GDRIVE_OAUTH_CREDENTIALS_FILE": None,
+        "GDRIVE_OAUTH_CREDENTIALS_JSON": None,
+    }
+    options.update(overrides)
+    return Settings(_env_file=None, **options)
+
+
+def test_get_storage_quota_reports_limit_usage_and_free(sdk):
+    quota = get_storage_quota(_quota_settings())
+
+    assert quota == {
+        "identity": "service_account",
+        "limit": 1_000_000_000_000,
+        "usage": 250_000_000_000,
+        "usage_in_drive": 200_000_000_000,
+        "usage_in_drive_trash": 10_000_000_000,
+        "free": 750_000_000_000,
+    }
+    assert sdk.service.about_resource.calls == [{"fields": "storageQuota"}]
+
+
+def test_get_storage_quota_treats_service_account_zero_limit_as_no_quota(sdk):
+    sdk.service.about_resource.result = {
+        "storageQuota": {"limit": "0", "usage": "0"}
+    }
+
+    quota = get_storage_quota(_quota_settings())
+
+    assert quota["limit"] is None
+    assert quota["free"] is None
+
+
+def test_get_storage_quota_supports_user_oauth(sdk):
+    quota = get_storage_quota(
+        _quota_settings(
+            GDRIVE_SERVICE_ACCOUNT_JSON=None,
+            GDRIVE_OAUTH_CREDENTIALS_JSON=OAUTH_JSON,
+        )
+    )
+
+    assert quota["identity"] == "user_oauth"
+    assert quota["limit"] == 1_000_000_000_000
+
+
+def test_get_storage_quota_requires_exactly_one_identity(sdk):
+    with pytest.raises(ValueError, match="exactly one"):
+        get_storage_quota(
+            _quota_settings(GDRIVE_OAUTH_CREDENTIALS_JSON=OAUTH_JSON)
+        )
+
+    with pytest.raises(ValueError, match="exactly one"):
+        get_storage_quota(
+            _quota_settings(GDRIVE_SERVICE_ACCOUNT_JSON=None)
+        )
+
+
+def test_format_bytes_is_human_readable():
+    assert format_bytes(None) == "n/a"
+    assert format_bytes(0) == "0 B"
+    assert format_bytes(1536) == "1.5 KB"
+    assert format_bytes(1_500_000_000) == "1.4 GB"

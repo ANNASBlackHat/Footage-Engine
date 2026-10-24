@@ -174,6 +174,30 @@ def _esc(text: str) -> str:
     )
 
 
+def _storage_quota_line() -> str | None:
+    """One-line Drive quota for the report, only when GDrive is the backend.
+
+    Best-effort: a credential or network problem must never block the report.
+    """
+    try:
+        cfg = get_settings()
+        if cfg.STORAGE_BACKEND != "gdrive":
+            return None
+
+        from footage_engine.storage.gdrive import format_bytes, get_storage_quota
+
+        quota = get_storage_quota(cfg)
+        if quota["limit"] is None:
+            return f"💾 Drive: {format_bytes(quota['usage'])} used (no quota reported)"
+        pct = (quota["usage"] / quota["limit"] * 100) if quota["limit"] else 0.0
+        return (
+            f"💾 Drive: {format_bytes(quota['usage'])} / {format_bytes(quota['limit'])} used "
+            f"({pct:.1f}%) · {format_bytes(quota['free'])} free"
+        )
+    except Exception as err:
+        return f"💾 Drive: quota unavailable ({type(err).__name__})"
+
+
 def _format_report(summary: dict) -> str:
     """Build a compact HTML message from the run summary."""
     status = summary.get("status")
@@ -200,6 +224,9 @@ def _format_report(summary: dict) -> str:
         lines.append(f"📝 {summary['captioned']} chunk(s) captioned")
     if summary.get("elapsed"):
         lines.append(f"⏱ {summary['elapsed']:.1f}s")
+    quota_line = _storage_quota_line()
+    if quota_line:
+        lines.append(quota_line)
     lines.append(f"▶️ {summary.get('url', '')}")
 
     if summary.get("error"):
