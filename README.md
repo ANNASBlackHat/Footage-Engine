@@ -194,8 +194,8 @@ uv run python scripts/ingest_youtube_video.py "https://www.youtube.com/watch?v=.
 uv run python scripts/ingest_youtube_video_transnet.py "https://www.youtube.com/watch?v=..." \
     --threshold 0.5 --workers 4 --caption
 
-# Caption already-ingested chunks on GPU — auto-selects the item with the most
-# uncaptioned chunks (or target one explicitly):
+# Caption already-ingested chunks (images and videos) on GPU — auto-selects
+# the item with the most uncaptioned chunks (or target one explicitly):
 uv run python scripts/caption_chunks.py --media-item-id auto --max-start-ts 600.0
 
 # Ingest keywords from a text file tagged with an entity

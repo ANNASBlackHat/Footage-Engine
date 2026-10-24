@@ -34,6 +34,16 @@ DEFAULT_PROMPT_TEMPLATE = (
     "murky, oceanic trench>"
 )
 
+IMAGE_PROMPT_TEMPLATE = (
+    "You are an expert image analyst for a documentary footage catalog.\n"
+    "Analyze the provided still image.\n\n"
+    "Generate an objective, high-precision visual caption and semantic tags in this EXACT format:\n"
+    "CAPTION: <A detailed 1-2 sentence description specifying the subject/creature, physical "
+    "action or pose, environment/setting, camera perspective, and lighting/visibility>\n"
+    "TAGS: <3 to 6 comma-separated lowercase keywords, e.g. underwater, octopus, coral reef, "
+    "close-up, blue light>"
+)
+
 MAX_IMAGE_SIDE = 448
 
 
@@ -79,6 +89,7 @@ class QwenCaptioner:
         version: str = "1.0",
         device: str = "auto",
         prompt_template: str = DEFAULT_PROMPT_TEMPLATE,
+        image_prompt_template: str = IMAGE_PROMPT_TEMPLATE,
         num_frames: int = 3,
         max_new_tokens: int = 256,
     ):
@@ -93,6 +104,7 @@ class QwenCaptioner:
         self.model_name = model_name
         self.version = version
         self.prompt_template = prompt_template
+        self.image_prompt_template = image_prompt_template
         self.num_frames = num_frames
         self.max_new_tokens = max_new_tokens
 
@@ -125,9 +137,22 @@ class QwenCaptioner:
         if not frames:
             return "", []
 
-        dur = max(0.1, (end_ts or start_ts + 1.0) - start_ts)
-        prompt = self.prompt_template.format(duration=dur)
+        dur = max(0.1, (end_ts if end_ts is not None else start_ts + 1.0) - start_ts)
+        return self._caption_frames(frames, self.prompt_template.format(duration=dur))
 
+    def caption_image(self, image_path: str) -> tuple[str, list[str]]:
+        """Captions a single still image and returns (caption, tags)."""
+        with Image.open(image_path) as img:
+            image = img.convert("RGB").copy()
+        return self._caption_frames(
+            [self._downscale(image)], self.image_prompt_template
+        )
+
+    def _caption_frames(
+        self,
+        frames: list[Image.Image],
+        prompt: str,
+    ) -> tuple[str, list[str]]:
         content: list[dict] = [{"type": "image", "image": img} for img in frames]
         content.append({"type": "text", "text": prompt})
         messages = [{"role": "user", "content": content}]
@@ -160,6 +185,17 @@ class QwenCaptioner:
 
     # ----------------------------------------------------------- internals
 
+    @staticmethod
+    def _downscale(image: Image.Image) -> Image.Image:
+        """Caps the longest side so the VLM input stays bounded."""
+        w, h = image.size
+        if max(w, h) <= MAX_IMAGE_SIDE:
+            return image
+        scale = MAX_IMAGE_SIDE / max(w, h)
+        return image.resize(
+            (int(w * scale), int(h * scale)), Image.Resampling.LANCZOS
+        )
+
     def _extract_frames(
         self,
         video_path: str,
@@ -174,15 +210,4 @@ class QwenCaptioner:
             end_ts=end_ts,
             num_frames=n,
         )
-        # Downscale oversized frames the way the pipeline does, so the VLM
-        # input stays bounded regardless of source resolution.
-        import numpy as np
-
-        for i, img in enumerate(frames):
-            w, h = img.size
-            if max(w, h) > MAX_IMAGE_SIDE:
-                scale = MAX_IMAGE_SIDE / max(w, h)
-                frames[i] = img.resize(
-                    (int(w * scale), int(h * scale)), Image.Resampling.LANCZOS
-                )
-        return frames
+        return [self._downscale(img) for img in frames]

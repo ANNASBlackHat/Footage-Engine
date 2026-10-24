@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Caption uncaptioned video chunks using a Qwen-VL model.
+"""Caption uncaptioned footage chunks (images and videos) using a Qwen-VL model.
 
 Footage-Engine version of the pipeline's ``caption_chunks.py``. Instead of raw
 psycopg2 it uses the SQLAlchemy session so it works against SQLite or
@@ -34,17 +34,17 @@ repo_root = str(Path(__file__).resolve().parent.parent)
 if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from footage_engine.captions import QwenCaptioner
 from footage_engine.config import get_settings
 from footage_engine.models.db import get_db_session, init_db
-from footage_engine.models.media import Chunk, MediaItem, MediaStatus
+from footage_engine.models.media import Chunk, MediaItem, MediaStatus, MediaType
 from footage_engine.storage import get_storage_backend
 
 
 def parse_args() -> argparse.Namespace:
-    ap = argparse.ArgumentParser(description="Caption uncaptioned video chunks with Qwen-VL.")
+    ap = argparse.ArgumentParser(description="Caption uncaptioned footage chunks (images and videos) with Qwen-VL.")
     ap.add_argument(
         "--media-item-id",
         default="auto",
@@ -120,7 +120,12 @@ def fetch_chunk_intervals(
     limit: int | None = None,
 ) -> list[Chunk]:
     """Returns distinct chunks to caption for a media item, ordered by start_ts."""
-    conditions = [Chunk.media_item_id == media_item_id, Chunk.end_ts.isnot(None)]
+    conditions = [
+        Chunk.media_item_id == media_item_id,
+        # Video chunks carry an interval; image chunks are a single still with
+        # end_ts=None, so accept either.
+        or_(Chunk.end_ts.isnot(None), Chunk.media_type == MediaType.IMAGE),
+    ]
     if max_start_ts is not None:
         conditions.append(Chunk.start_ts <= max_start_ts)
     if not overwrite:
@@ -148,6 +153,16 @@ def fetch_chunk_intervals(
         seen.add(key)
         unique.append(chunk)
     return unique
+
+
+def _interval_label(chunk: Chunk) -> str:
+    """Human-readable interval label for logs and dry runs."""
+    if chunk.media_type == MediaType.IMAGE or chunk.end_ts is None:
+        return "image"
+    return (
+        f"{chunk.start_ts:8.1f}s → {chunk.end_ts:8.1f}s "
+        f"({chunk.end_ts - chunk.start_ts:5.1f}s)"
+    )
 
 
 def resolve_video_path(
@@ -212,24 +227,26 @@ def process_item(
         if dry_run:
             print(f"  [dry-run] Would caption {len(intervals)} chunk interval(s) for {media_item_id[:8]}:")
             for c in intervals[:10]:
-                print(f"    [{c.start_ts:.1f}s - {c.end_ts:.1f}s] ({(c.end_ts or 0) - c.start_ts:.1f}s)")
+                print(f"    {_interval_label(c)}")
             if len(intervals) > 10:
                 print(f"    ... and {len(intervals) - 10} more.")
             return len(intervals)
 
         video_path = resolve_video_path(storage, session, media_item_id)
-        print(f"  → Video: {video_path}")
+        print(f"  → Source: {video_path}")
 
         done = 0
         t0 = time.time()
         for idx, chunk in enumerate(intervals, 1):
-            dur = max(0.1, (chunk.end_ts or 0) - chunk.start_ts)
-            caption, tags = captioner.caption_chunk(
-                video_path=video_path,
-                start_ts=chunk.start_ts,
-                end_ts=chunk.end_ts,
-                num_frames=num_frames,
-            )
+            if chunk.media_type == MediaType.IMAGE:
+                caption, tags = captioner.caption_image(video_path)
+            else:
+                caption, tags = captioner.caption_chunk(
+                    video_path=video_path,
+                    start_ts=chunk.start_ts,
+                    end_ts=chunk.end_ts,
+                    num_frames=num_frames,
+                )
             chunk.caption = caption
             chunk.tags = tags
             session.flush()
@@ -237,8 +254,7 @@ def process_item(
             if progress_callback:
                 progress_callback(done, len(intervals))
             print(
-                f"    [{idx:03d}/{len(intervals)}] {chunk.start_ts:8.1f}s → {chunk.end_ts:8.1f}s "
-                f"({dur:5.1f}s) | 💬 {caption[:80]}"
+                f"    [{idx:03d}/{len(intervals)}] {_interval_label(chunk)} | 💬 {caption[:80]}"
                 + (f" | 🏷️ {', '.join(tags[:5])}" if tags else ""),
                 flush=True,
             )

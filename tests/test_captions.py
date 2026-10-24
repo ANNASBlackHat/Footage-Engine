@@ -19,7 +19,7 @@ if repo_root not in sys.path:
 from footage_engine.captions.qwen_captioner import parse_model_response
 from footage_engine.config import Settings
 from footage_engine.models.db import get_db_session, init_db
-from footage_engine.models.media import Chunk, MediaItem
+from footage_engine.models.media import Chunk, MediaItem, MediaType
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +110,14 @@ def caption_db():
 
     item_a = MediaItem(id="item-a", provider="youtube", source_url="https://y/a", storage_path="a.mp4")
     item_b = MediaItem(id="item-b", provider="youtube", source_url="https://y/b", storage_path="b.mp4")
-    session.add_all([item_a, item_b])
+    item_img = MediaItem(
+        id="item-img",
+        provider="unsplash",
+        source_url="https://u/x",
+        storage_path="x.jpg",
+        media_type=MediaType.IMAGE,
+    )
+    session.add_all([item_a, item_b, item_img])
 
     # item_a: one captioned, one uncaptioned
     session.add_all(
@@ -125,6 +132,17 @@ def caption_db():
             Chunk(media_item_id="item-b", start_ts=0.0, end_ts=10.0, caption=None, tags=None),
             Chunk(media_item_id="item-b", start_ts=10.0, end_ts=20.0, caption=None, tags=None),
         ]
+    )
+    # item_img: a single still image chunk with no interval
+    session.add(
+        Chunk(
+            media_item_id="item-img",
+            start_ts=0.0,
+            end_ts=None,
+            media_type=MediaType.IMAGE,
+            caption=None,
+            tags=None,
+        )
     )
     session.commit()
     session.close()
@@ -233,3 +251,69 @@ def test_process_item_dry_run_writes_nothing(caption_db):
             )
         ).scalar_one()
         assert chunk.caption is None
+
+
+def test_fetch_chunk_intervals_includes_image_chunks(caption_db):
+    from scripts.caption_chunks import fetch_chunk_intervals
+
+    with get_db_session(caption_db) as session:
+        rows = fetch_chunk_intervals(session, "item-img")
+        assert len(rows) == 1
+        assert rows[0].media_type == MediaType.IMAGE
+        assert rows[0].end_ts is None
+
+
+def test_process_item_captions_image_via_caption_image(caption_db):
+    from scripts.caption_chunks import process_item
+
+    fake_captioner = MagicMock()
+    fake_captioner.caption_image.return_value = ("an octopus on coral", ["octopus"])
+    fake_captioner.caption_chunk.side_effect = AssertionError("video path used")
+    fake_storage = MagicMock()
+    fake_storage.get_local_path.return_value = "/tmp/dummy.jpg"
+
+    with (
+        patch("scripts.caption_chunks.QwenCaptioner", return_value=fake_captioner),
+        patch("scripts.caption_chunks.get_storage_backend", return_value=fake_storage),
+    ):
+        n = process_item(
+            database_url=caption_db,
+            media_item_id="item-img",
+            model_id="fake",
+            num_frames=3,
+        )
+
+    assert n == 1
+    fake_captioner.caption_image.assert_called_once_with("/tmp/dummy.jpg")
+    fake_captioner.caption_chunk.assert_not_called()
+    with get_db_session(caption_db) as session:
+        chunk = session.execute(
+            select(Chunk).where(Chunk.media_item_id == "item-img")
+        ).scalar_one()
+        assert chunk.caption == "an octopus on coral"
+        assert chunk.tags == ["octopus"]
+
+
+def test_caption_image_loads_and_downscales_a_single_frame(tmp_path):
+    from PIL import Image
+
+    from footage_engine.captions.qwen_captioner import IMAGE_PROMPT_TEMPLATE, QwenCaptioner
+
+    path = tmp_path / "still.png"
+    Image.new("RGB", (1000, 500), (10, 20, 30)).save(path)
+
+    captioner = object.__new__(QwenCaptioner)
+    captioner.image_prompt_template = IMAGE_PROMPT_TEMPLATE
+    seen = {}
+
+    def fake_caption(frames, prompt):
+        seen["frames"] = frames
+        seen["prompt"] = prompt
+        return "a still caption", ["still"]
+
+    captioner._caption_frames = fake_caption
+
+    assert captioner.caption_image(str(path)) == ("a still caption", ["still"])
+    assert len(seen["frames"]) == 1
+    assert seen["frames"][0].size == (448, 224)
+    assert "still image" in seen["prompt"]
